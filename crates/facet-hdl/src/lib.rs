@@ -29,6 +29,8 @@ pub mod codec;
 mod hw;
 mod port;
 
-pub use boundary::{Boundary, Direction, FINGERPRINT_WORD, PortDecl};
+pub use boundary::{Boundary, Direction, FINGERPRINT_WORD, PortDecl, PortKind, queue};
 pub use hw::{HwType, LayoutError};
-pub use port::{BindError, FromFabric, PortError, ToFabric, Transport, bind};
+pub use port::{
+    BindError, FromFabric, FromFabricQueue, PortError, PushError, ToFabric, ToFabricQueue, Transport, bind,
+};

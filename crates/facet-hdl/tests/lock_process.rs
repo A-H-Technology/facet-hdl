@@ -2,12 +2,14 @@
 //! and between fork and exec the child holds a copy of every open fd,
 //! including other tests' lock files, which makes their release racy.
 
+mod common;
+
+use common::Mem;
 use facet::Facet;
-use facet_hdl::{BindError, Boundary, FromFabric, ToFabric, Transport, bind};
-use std::io::{self, BufRead, BufReader};
+use facet_hdl::{BindError, FromFabric, ToFabric, bind};
+use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
 
 #[derive(Facet)]
 pub struct Regs {
@@ -15,34 +17,8 @@ pub struct Regs {
     pub status: FromFabric<u32>,
 }
 
-struct Mem {
-    words: Arc<Mutex<Vec<u32>>>,
-    lock: PathBuf,
-}
-
-impl Transport for Mem {
-    fn read(&mut self, word: u32) -> io::Result<u32> {
-        Ok(self.words.lock().unwrap()[word as usize])
-    }
-    fn write(&mut self, word: u32, value: u32) -> io::Result<()> {
-        self.words.lock().unwrap()[word as usize] = value;
-        Ok(())
-    }
-    fn lock_path(&self) -> PathBuf {
-        self.lock.clone()
-    }
-}
-
-/// A separate window per call (as two processes mapping the same bridge
-/// would each have) sharing only the lock file.
 fn window_at(lock: PathBuf) -> Mem {
-    let b = Boundary::of::<Regs>().unwrap();
-    let mut words = vec![0; b.words() as usize];
-    words[0] = b.fingerprint();
-    Mem {
-        words: Arc::new(Mutex::new(words)),
-        lock,
-    }
+    Mem::for_boundary::<Regs>(lock).0
 }
 
 const HOLD: &str = "FACET_HDL_TEST_HOLD_LOCK";

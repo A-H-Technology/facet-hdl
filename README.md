@@ -12,7 +12,19 @@ pub struct Blinky {
     pub operands: ToFabric<Operands>,
     pub sum: FromFabric<Sum>,
 }
+
+#[derive(Facet)]
+pub struct Pipe {
+    pub jobs: ToFabricQueue<Job, 64>,     // host -> fabric channel
+    pub done: FromFabricQueue<Done, 64>,  // fabric -> host channel
+}
 ```
+
+Two kinds of port, each in both directions. `ToFabric`/`FromFabric` are
+registers: one value, last writer wins. `ToFabricQueue`/`FromFabricQueue` are
+SPSC channels: a ring of `N` entries that never drops or repeats one. The host
+gets `push(&T) -> Result<(), PushError>` / `pop() -> Option<T>` on `&mut self`,
+and the fabric gets a `<name>`, `<name>_valid`, `<name>_ready` handshake.
 
 - **VHDL** (`facet-hdl-vhdl`): a package with one VHDL type per Rust type
   (records, enums, arrays) plus `to_slv`/`to_<type>` packing functions, and an
@@ -32,7 +44,7 @@ HPS-to-FPGA bridge, but the pieces are separate crates:
 
 | crate | role |
 | --- | --- |
-| `facet-hdl` | `ToFabric`/`FromFabric`, shape → `HwType`, bit codec, `Boundary` layout, `Transport`, `bind` |
+| `facet-hdl` | `ToFabric`/`FromFabric` registers, `ToFabricQueue`/`FromFabricQueue` channels, shape → `HwType`, bit codec, `Boundary` layout, `Transport`, `bind` |
 | `facet-hdl-vhdl` | VHDL-2008 package and AXI4-Lite register entity; `literal(&value)` renders a Rust value as a VHDL constant |
 | `facet-hdl-ghdl` | Co-simulation: GHDL runs the fabric, and a generated testbench turns stdin lines into AXI transactions. `SimTransport` makes the real host code drive it |
 | `facet-hdl-devmem` | `Transport` over an uncached `/dev/mem` mapping of the bridge (`AGILEX5_LWH2F = 0x2000_0000`) |
@@ -56,8 +68,9 @@ These are the rules `codec.rs` and the generated VHDL both implement.
   strings, slices, data-carrying enums, zero-sized things, recursive types.
   Generated names that collide or are illegal in VHDL (`next`, `a__b`, a port
   `status` next to a type `Status`, ...) are rejected too.
-- Each port occupies `ceil(width/32)` consecutive 32-bit words, in field order,
-  starting at word 1.
+- Each register port occupies `ceil(width/32)` consecutive 32-bit words, in
+  field order, starting at word 1. A queue port occupies two counter words
+  (`+0` tail, `+1` head) followed by one entry's worth of words.
 - A **ToFabric** write commits when its last word is written. Earlier words
   are buffered, so the fabric never sees a torn value, and `<port>_written`
   pulses once per commit.
@@ -70,6 +83,23 @@ These are the rules `codec.rs` and the generated VHDL both implement.
   waits for it with `FromFabric::read_until`; `blinky::add` shows the pattern.
   A `ToFabric` port is a mailbox, so a write replaces a request still in
   flight. Queue ports are for traffic that can't lose messages.
+- A **queue** has a free-running u32 head (producer count) and tail (consumer
+  count). Each counter has exactly one writer, so the bus needs no locks or
+  atomics. `used = head - tail`, which keeps full and empty distinct. The depth
+  is a power of two from 2 to 65536, and it's part of the fingerprint.
+  - Host → fabric: the host writes the entry window, and its last word
+    enqueues. The host caches the fabric's tail and re-reads it only when the
+    ring looks full, so a push normally costs no reads at all.
+  - Fabric → host: the entry window shows the oldest entry, snapshotted on its
+    first word. To pop, the host writes the new **absolute** tail, never a
+    pop-on-read: a debug dump or a retried read must not eat entries, and the
+    fabric ignores a tail write that isn't a step forward.
+  - Full and empty only show up in the counters, never as an AXI error. An
+    error response can arrive as an SError and panic the kernel. If the
+    fabric's counters ever disagree with the host's (`head - tail > N`, or a
+    counter the host owns moving on its own), that's `PortError::Desync`; it
+    is never used as an index. `bind` starts from the fabric's counters, so a
+    restarted host resumes where the ring really is.
 - Words from two accessors interleaving on one port would commit or return
   a value neither of them meant. So a binding owns its whole register window:
   `bind` takes an exclusive `flock` on the transport's lock file and holds it
@@ -91,6 +121,18 @@ These are the rules `codec.rs` and the generated VHDL both implement.
   arrays, `u128` and `i8`/`i64`. A golden constant rendered from Rust checks
   VHDL pack and unpack *separately*, so a symmetric bug can't hide behind the
   loopback. A planted field-order bug does fail it.
+- Queue co-sim: a fabric pipeline (`jobs` → ×3 → `done`) runs 300 sequenced
+  jobs both ways at full rate. It's run once free-running and once with an
+  LFSR making the fabric stall, and checks for gaps, duplicates and corrupt
+  2- and 3-word entries. Backpressure has to actually happen during the run.
+  Another test pushes into a frozen consumer: the ninth push returns `Full`,
+  and the fabric's counters are unchanged afterwards. A planted bug (the
+  fabric consuming while not ready) fails all three tests.
+- Window ownership: a second `bind` is refused in-process and from another
+  process, and a holder killed with `kill -9` frees the window. A co-sim
+  produces a real torn commit through an unowned second accessor.
+- Latency: a co-sim with a 200-cycle adder shows write-then-read returning a
+  stale value, and `blinky::add` returning the right one.
 
 ## Not yet: running on mercury
 
@@ -110,5 +152,7 @@ network when this was written. Before it can do anything there:
 
 Candidates for single-sourcing next: the Platform Designer `_hw.tcl` for the
 register entity (address span and interface come straight from `Boundary`),
-interrupt lines (`FromFabric` change notification), and reset values from
+an interrupt line raised while a `FromFabricQueue` is non-empty. It should be
+level-sensitive, so no wakeup can be lost, and come with a UIO transport so
+the host can block instead of polling. Reset values could come from
 `Default`.

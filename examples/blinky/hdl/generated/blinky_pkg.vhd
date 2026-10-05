@@ -2,17 +2,17 @@
 -- declaration and regenerate.
 --
 -- Layout:
---   leds@1+1:ToFabric:LedControl{pattern:Pattern{Off,Solid,Blink,Chase},mask:u8,period_ms:u16}
---   status@2+3:FromFabric:LedStatus{pattern:Pattern{Off,Solid,Blink,Chase},leds:u8,uptime_ms:u64}
---   operands@5+3:ToFabric:Operands{a:u32,b:u32,negate:bool}
---   sum@8+3:FromFabric:Sum{value:i64,calls:u16}
+--   leds@1+1:ToFabric:Register:LedControl{pattern:Pattern{Off,Solid,Blink,Chase},mask:u8,period_ms:u16}
+--   status@2+3:FromFabric:Register:LedStatus{pattern:Pattern{Off,Solid,Blink,Chase},leds:u8,uptime_ms:u64}
+--   operands@5+3:ToFabric:Register:Operands{a:u32,b:u32,negate:bool}
+--   sum@8+3:FromFabric:Register:Sum{value:i64,calls:u16}
 
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 
 package blinky_pkg is
-  constant blinky_fingerprint : std_logic_vector(31 downto 0) := x"470138ae";
+  constant blinky_fingerprint : std_logic_vector(31 downto 0) := x"df72ab6c";
   constant blinky_words : natural := 11;
 
   type pattern_t is (pattern_off, pattern_solid, pattern_blink, pattern_chase);

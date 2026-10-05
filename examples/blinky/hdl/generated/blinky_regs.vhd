@@ -66,6 +66,7 @@ begin
           operands_reg <= (others => '0');
           operands_written <= '0';
       else
+
         if s2m.bvalid = '1' then
           if axi_in.bready = '1' then
             s2m.bvalid <= '0';

@@ -166,12 +166,14 @@ impl fmt::Display for HwType {
 pub enum LayoutError {
     #[error("`{ty}` at `{path}` can't cross the fabric boundary: {why}")]
     Unsupported { path: String, ty: String, why: String },
-    #[error("`{0}` is not a boundary: it must be a struct whose fields are all ToFabric<T> or FromFabric<T>")]
+    #[error("`{0}` is not a boundary: it must be a struct whose fields are all ports")]
     NotABoundary(String),
-    #[error("boundary field `{0}` is neither ToFabric<T> nor FromFabric<T>")]
+    #[error("boundary field `{0}` is not a port (ToFabric, FromFabric, ToFabricQueue or FromFabricQueue)")]
     NotAPort(String),
     #[error("two different types are both called `{0}`; generated code would conflate them")]
     NameClash(String),
+    #[error("queue `{port}` has depth {depth}; it must be a power of two from 2 to 65536")]
+    QueueDepth { port: &'static str, depth: u64 },
 }
 
 #[cfg(test)]
