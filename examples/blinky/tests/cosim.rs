@@ -46,22 +46,52 @@ fn checked_in_vhdl_matches_the_declaration() {
 #[test]
 fn multi_word_write_commits_once_and_the_sum_comes_back_signed() {
     let (b, _clk) = spawn();
-    b.operands.write(&Operands { a: u32::MAX, b: 1, negate: true }).unwrap();
-    assert_eq!(b.sum.read().unwrap(), Sum { value: -(1i64 << 32), calls: 1 });
-    b.operands.write(&Operands { a: 40, b: 2, negate: false }).unwrap();
+    b.operands
+        .write(&Operands {
+            a: u32::MAX,
+            b: 1,
+            negate: true,
+        })
+        .unwrap();
+    assert_eq!(
+        b.sum.read().unwrap(),
+        Sum {
+            value: -(1i64 << 32),
+            calls: 1
+        }
+    );
+    b.operands
+        .write(&Operands {
+            a: 40,
+            b: 2,
+            negate: false,
+        })
+        .unwrap();
     assert_eq!(b.sum.read().unwrap(), Sum { value: 42, calls: 2 });
 }
 
 #[test]
 fn led_patterns_follow_the_control_record() {
     let (b, clk) = spawn();
-    b.leds.write(&LedControl { pattern: Pattern::Solid, mask: 0xA5, period_ms: 1 }).unwrap();
+    b.leds
+        .write(&LedControl {
+            pattern: Pattern::Solid,
+            mask: 0xA5,
+            period_ms: 1,
+        })
+        .unwrap();
     clk.cycles(3).unwrap();
     let s = b.status.read().unwrap();
     assert_eq!((s.pattern, s.leds), (Pattern::Solid, 0xA5));
 
     // A 3-word read itself costs ~a dozen cycles, so the step must be slower than sampling.
-    b.leds.write(&LedControl { pattern: Pattern::Chase, mask: 0xFF, period_ms: 40 }).unwrap();
+    b.leds
+        .write(&LedControl {
+            pattern: Pattern::Chase,
+            mask: 0xFF,
+            period_ms: 40,
+        })
+        .unwrap();
     let mut seen = std::collections::BTreeSet::new();
     for _ in 0..100 {
         clk.cycles(7).unwrap();

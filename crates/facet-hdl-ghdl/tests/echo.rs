@@ -103,7 +103,11 @@ impl Rng {
         [Tri::A, Tri::B, Tri::C][(self.next() % 3) as usize]
     }
     fn inner(&mut self) -> Inner {
-        Inner { flag: self.next() & 1 == 1, tri: self.tri(), small: self.next() as i8 }
+        Inner {
+            flag: self.next() & 1 == 1,
+            tri: self.tri(),
+            small: self.next() as i8,
+        }
     }
     fn everything(&mut self) -> Everything {
         Everything {
@@ -147,15 +151,25 @@ fn rust_and_vhdl_agree_on_every_bit() {
     let (transport, _clk) = sim.spawn().unwrap();
     let echo: Echo = bind(transport).unwrap();
 
-    assert_eq!(echo.golden.read().unwrap(), golden, "VHDL to_slv disagrees with the Rust decoder");
+    assert_eq!(
+        echo.golden.read().unwrap(),
+        golden,
+        "VHDL to_slv disagrees with the Rust decoder"
+    );
     echo.input.write(&golden).unwrap();
-    assert!(echo.matches_golden.read().unwrap(), "VHDL to_<type> disagrees with the Rust encoder");
+    assert!(
+        echo.matches_golden.read().unwrap(),
+        "VHDL to_<type> disagrees with the Rust encoder"
+    );
 
     let mut rng = Rng(SEED);
     for i in 0..200 {
         let v = rng.everything();
         echo.input.write(&v).unwrap();
         assert_eq!(echo.output.read().unwrap(), v, "iteration {i}");
-        assert!(!echo.matches_golden.read().unwrap(), "iteration {i} isn't the golden value");
+        assert!(
+            !echo.matches_golden.read().unwrap(),
+            "iteration {i} isn't the golden value"
+        );
     }
 }

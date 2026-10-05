@@ -14,13 +14,20 @@ pub fn words_for(bits: u32) -> u32 {
 }
 
 pub fn encode<T: Facet<'static>>(value: &T, ty: &HwType) -> Vec<u32> {
-    let mut w = BitWriter { words: vec![0; words_for(ty.width()) as usize], cursor: 0 };
+    let mut w = BitWriter {
+        words: vec![0; words_for(ty.width()) as usize],
+        cursor: 0,
+    };
     encode_peek(Peek::new(value), ty, &mut w);
     w.words
 }
 
 pub fn decode<T: Facet<'static>>(words: &[u32], ty: &HwType) -> Result<T, DecodeError> {
-    let mut r = BitReader { words, cursor: 0, path: Vec::new() };
+    let mut r = BitReader {
+        words,
+        cursor: 0,
+        path: Vec::new(),
+    };
     let partial = Partial::alloc::<T>().map_err(reflect)?;
     let partial = decode_into(partial, ty, &mut r)?;
     partial.build().map_err(reflect)?.materialize().map_err(reflect)
@@ -67,11 +74,7 @@ fn encode_peek(peek: Peek<'_, 'static>, ty: &HwType, w: &mut BitWriter) {
     }
 }
 
-fn decode_into(
-    p: Partial<'static>,
-    ty: &HwType,
-    r: &mut BitReader<'_>,
-) -> Result<Partial<'static>, DecodeError> {
+fn decode_into(p: Partial<'static>, ty: &HwType, r: &mut BitReader<'_>) -> Result<Partial<'static>, DecodeError> {
     Ok(match ty {
         HwType::Bool => p.set(r.take(1) != 0).map_err(reflect)?,
         HwType::Int { bits, signed } => {
@@ -166,7 +169,11 @@ impl BitReader<'_> {
 pub enum DecodeError {
     /// The fabric drove a variant index the Rust enum doesn't have.
     #[error("fabric sent variant index {index} for `{ty}` at `{path}`, which has no such variant")]
-    Discriminant { path: String, ty: &'static str, index: usize },
+    Discriminant {
+        path: String,
+        ty: &'static str,
+        index: usize,
+    },
     #[error("reflection failed while decoding (a facet-hdl bug): {0}")]
     Reflect(String),
 }
@@ -206,7 +213,13 @@ mod tests {
 
     #[test]
     fn packs_lsb_first_in_declaration_order() {
-        let v = Mixed { on: true, mode: Mode::Blink, level: -1, pair: [0xABCD, 0x1234], wide: u64::MAX };
+        let v = Mixed {
+            on: true,
+            mode: Mode::Blink,
+            level: -1,
+            pair: [0xABCD, 0x1234],
+            wide: u64::MAX,
+        };
         // on(1) mode(2) level(8) pair(32) wide(64) = 107 bits -> 4 words
         let words = roundtrip(v);
         assert_eq!(words[0] & 0b111, 0b101, "on=1 at bit 0, Blink=2 at bits 1..3");

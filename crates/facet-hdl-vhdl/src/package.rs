@@ -1,7 +1,7 @@
 //! `<boundary>_pkg`: one VHDL type per Rust type plus the packing functions
 //! that mirror `facet_hdl::codec` bit for bit.
 
-use crate::names::{Namespace, NameError, enum_literal, type_mark, type_stem};
+use crate::names::{NameError, Namespace, enum_literal, type_mark, type_stem};
 use facet_hdl::{Boundary, HwType};
 use std::fmt::Write;
 
@@ -19,7 +19,10 @@ pub fn unpack(src: &str, lo: &str, hi: &str, ty: &HwType) -> String {
     match ty {
         HwType::Bool => format!("{src}({lo})"),
         HwType::Int { signed, .. } => {
-            format!("{}({src}({hi} downto {lo}))", if *signed { "signed" } else { "unsigned" })
+            format!(
+                "{}({src}({hi} downto {lo}))",
+                if *signed { "signed" } else { "unsigned" }
+            )
         }
         _ => format!("to_{}({src}({hi} downto {lo}))", type_mark(ty)),
     }
@@ -124,7 +127,13 @@ pub fn generate(b: &Boundary, ns: &mut Namespace) -> Result<String, NameError> {
                 .unwrap();
             }
             HwType::Array { elem, len } => {
-                writeln!(head, "  type {mark} is array (0 to {}) of {};", len - 1, type_mark(elem)).unwrap();
+                writeln!(
+                    head,
+                    "  type {mark} is array (0 to {}) of {};",
+                    len - 1,
+                    type_mark(elem)
+                )
+                .unwrap();
                 let w = elem.width();
                 let (l, h) = (format!("i * {w}"), format!("(i + 1) * {w} - 1"));
                 writeln!(

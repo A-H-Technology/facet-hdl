@@ -20,6 +20,7 @@ version = "0.1.0"
 dependencies = [
  "facet",
  "facet-hdl",
+ "facet-hdl-devmem",
  "facet-hdl-ghdl",
  "facet-hdl-vhdl",
 ]
@@ -66,6 +67,16 @@ version = "0.1.0"
 dependencies = [
  "facet",
  "thiserror",
+]
+
+[[package]]
+name = "facet-hdl-devmem"
+version = "0.1.0"
+dependencies = [
+ "facet",
+ "facet-hdl",
+ "libc",
+ "memmap2",
 ]
 
 [[package]]
@@ -186,6 +197,21 @@ name = "impls"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a46645bbd70538861a90d0f26c31537cdf1e44aae99a794fb75a664b70951bc"
+
+[[package]]
+name = "libc"
+version = "0.2.190"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce5d3ddc6d3fa000eb1536d85e147bfe31aacaba692ed6a876f95cb7c855be78"
+
+[[package]]
+name = "memmap2"
+version = "0.9.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1219ed1b7f229ee7104d281dd01d6802fe28bb6e95d292942c4daacdeb798c0"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "mutants"

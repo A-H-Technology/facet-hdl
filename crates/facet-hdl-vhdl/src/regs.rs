@@ -11,7 +11,7 @@
 //! - Writes are whole-word only (`wstrb` is ignored). Unmapped addresses, and
 //!   writes to `FromFabric` ports, answer SLVERR.
 
-use crate::names::{Namespace, NameError, snake, type_mark};
+use crate::names::{NameError, Namespace, snake, type_mark};
 use crate::package::{pack, package_name, unpack};
 use facet_hdl::{Boundary, Direction, FINGERPRINT_WORD};
 use std::fmt::Write;
@@ -27,9 +27,25 @@ pub fn min_addr_width(b: &Boundary) -> u32 {
 }
 
 const FIXED_PORTS: &[&str] = &[
-    "clk", "rst_n", "s_axi_awaddr", "s_axi_awvalid", "s_axi_awready", "s_axi_wdata", "s_axi_wstrb",
-    "s_axi_wvalid", "s_axi_wready", "s_axi_bresp", "s_axi_bvalid", "s_axi_bready", "s_axi_araddr",
-    "s_axi_arvalid", "s_axi_arready", "s_axi_rdata", "s_axi_rresp", "s_axi_rvalid", "s_axi_rready",
+    "clk",
+    "rst_n",
+    "s_axi_awaddr",
+    "s_axi_awvalid",
+    "s_axi_awready",
+    "s_axi_wdata",
+    "s_axi_wstrb",
+    "s_axi_wvalid",
+    "s_axi_wready",
+    "s_axi_bresp",
+    "s_axi_bvalid",
+    "s_axi_bready",
+    "s_axi_araddr",
+    "s_axi_arvalid",
+    "s_axi_arready",
+    "s_axi_rdata",
+    "s_axi_rresp",
+    "s_axi_rvalid",
+    "s_axi_rready",
 ];
 
 pub fn generate(b: &Boundary, ns: &mut Namespace) -> Result<String, NameError> {
@@ -40,11 +56,22 @@ pub fn generate(b: &Boundary, ns: &mut Namespace) -> Result<String, NameError> {
     for p in FIXED_PORTS {
         ns.claim(p, "the AXI4-Lite interface")?;
     }
-    for internal in ["word", "awready_i", "wready_i", "bvalid_i", "bresp_i", "arready_i", "rvalid_i", "rresp_i", "rdata_i"] {
+    for internal in [
+        "word",
+        "awready_i",
+        "wready_i",
+        "bvalid_i",
+        "bresp_i",
+        "arready_i",
+        "rvalid_i",
+        "rresp_i",
+        "rdata_i",
+    ] {
         ns.claim(internal, "register-file internals")?;
     }
 
-    let (mut ports, mut signals, mut outputs, mut resets) = (String::new(), String::new(), String::new(), String::new());
+    let (mut ports, mut signals, mut outputs, mut resets) =
+        (String::new(), String::new(), String::new(), String::new());
     let (mut vars, mut writes, mut reads) = (String::new(), String::new(), String::new());
 
     for p in &b.ports {
@@ -61,23 +88,46 @@ pub fn generate(b: &Boundary, ns: &mut Namespace) -> Result<String, NameError> {
 
         match p.direction {
             Direction::ToFabric => {
-                let (reg, shadow, written) = (format!("{name}_reg"), format!("{name}_shadow"), format!("{name}_written"));
+                let (reg, shadow, written) = (
+                    format!("{name}_reg"),
+                    format!("{name}_shadow"),
+                    format!("{name}_written"),
+                );
                 ns.claim(&reg, origin("the committed register"))?;
                 ns.claim(&written, origin("the commit strobe"))?;
                 writeln!(ports, "    -- Host -> fabric, words {}..={last}\n    {name} : out {mark};\n    {written} : out std_logic;", p.word).unwrap();
-                writeln!(signals, "  signal {reg} : std_logic_vector({} downto 0) := (others => '0');", w - 1).unwrap();
-                writeln!(outputs, "  {name} <= {};", unpack(&reg, "0", &(w - 1).to_string(), &p.ty)).unwrap();
+                writeln!(
+                    signals,
+                    "  signal {reg} : std_logic_vector({} downto 0) := (others => '0');",
+                    w - 1
+                )
+                .unwrap();
+                writeln!(
+                    outputs,
+                    "  {name} <= {};",
+                    unpack(&reg, "0", &(w - 1).to_string(), &p.ty)
+                )
+                .unwrap();
                 writeln!(resets, "          {reg} <= (others => '0');").unwrap();
                 writeln!(resets, "          {written} <= '0';").unwrap();
                 if p.words > 1 {
                     ns.claim(&shadow, origin("the write buffer"))?;
-                    writeln!(signals, "  signal {shadow} : std_logic_vector({} downto 0) := (others => '0');", (p.words - 1) * 32 - 1).unwrap();
+                    writeln!(
+                        signals,
+                        "  signal {shadow} : std_logic_vector({} downto 0) := (others => '0');",
+                        (p.words - 1) * 32 - 1
+                    )
+                    .unwrap();
                 }
                 for k in 0..p.words {
                     let word = p.word + k;
                     let (lo, hi) = (k * 32, k * 32 + 31);
                     if word == last {
-                        let prefix = if p.words > 1 { format!("s_axi_wdata & {shadow}") } else { "s_axi_wdata".into() };
+                        let prefix = if p.words > 1 {
+                            format!("s_axi_wdata & {shadow}")
+                        } else {
+                            "s_axi_wdata".into()
+                        };
                         writeln!(
                             writes,
                             "            when {word} =>\n              {full} := {prefix};\n              {reg} <= {full}({} downto 0);\n              {written} <= '1';",
@@ -85,7 +135,11 @@ pub fn generate(b: &Boundary, ns: &mut Namespace) -> Result<String, NameError> {
                         )
                         .unwrap();
                     } else {
-                        writeln!(writes, "            when {word} =>\n              {shadow}({hi} downto {lo}) <= s_axi_wdata;").unwrap();
+                        writeln!(
+                            writes,
+                            "            when {word} =>\n              {shadow}({hi} downto {lo}) <= s_axi_wdata;"
+                        )
+                        .unwrap();
                     }
                     writeln!(
                         reads,
@@ -98,9 +152,19 @@ pub fn generate(b: &Boundary, ns: &mut Namespace) -> Result<String, NameError> {
             Direction::FromFabric => {
                 let snap = format!("{name}_snap");
                 ns.claim(&snap, origin("the read snapshot"))?;
-                writeln!(ports, "    -- Fabric -> host, words {}..={last}\n    {name} : in {mark};", p.word).unwrap();
+                writeln!(
+                    ports,
+                    "    -- Fabric -> host, words {}..={last}\n    {name} : in {mark};",
+                    p.word
+                )
+                .unwrap();
                 if p.words > 1 {
-                    writeln!(signals, "  signal {snap} : std_logic_vector({span_hi} downto 0) := (others => '0');", span_hi = span - 1).unwrap();
+                    writeln!(
+                        signals,
+                        "  signal {snap} : std_logic_vector({span_hi} downto 0) := (others => '0');",
+                        span_hi = span - 1
+                    )
+                    .unwrap();
                 }
                 for k in 0..p.words {
                     let word = p.word + k;
@@ -115,7 +179,11 @@ pub fn generate(b: &Boundary, ns: &mut Namespace) -> Result<String, NameError> {
                         }
                         writeln!(reads, "{s}").unwrap();
                     } else {
-                        writeln!(reads, "            when {word} =>\n              rdata_i <= {snap}({hi} downto {lo});").unwrap();
+                        writeln!(
+                            reads,
+                            "            when {word} =>\n              rdata_i <= {snap}({hi} downto {lo});"
+                        )
+                        .unwrap();
                     }
                 }
             }

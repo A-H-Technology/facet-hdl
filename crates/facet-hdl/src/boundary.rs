@@ -60,20 +60,33 @@ impl Boundary {
             let payload = fs.type_params[0].shape;
             let ty = HwType::of(payload).map_err(|e| match e {
                 LayoutError::Unsupported { path, ty, why } => LayoutError::Unsupported {
-                    path: if path.is_empty() { f.name.to_owned() } else { format!("{}.{path}", f.name) },
+                    path: if path.is_empty() {
+                        f.name.to_owned()
+                    } else {
+                        format!("{}.{path}", f.name)
+                    },
                     ty,
                     why,
                 },
                 e => e,
             })?;
             let words = words_for(ty.width());
-            ports.push(PortDecl { name: f.name, direction, ty: Arc::new(ty), word, words });
+            ports.push(PortDecl {
+                name: f.name,
+                direction,
+                ty: Arc::new(ty),
+                word,
+                words,
+            });
             word += words;
         }
         if ports.is_empty() {
             return Err(LayoutError::NotABoundary(shape.to_string()));
         }
-        let boundary = Self { name: shape.type_identifier, ports };
+        let boundary = Self {
+            name: shape.type_identifier,
+            ports,
+        };
         boundary.named_types()?;
         Ok(boundary)
     }
@@ -86,7 +99,9 @@ impl Boundary {
     /// FNV-1a over the canonical layout text: port order, names, directions,
     /// addresses and full structural types all feed in.
     pub fn fingerprint(&self) -> u32 {
-        self.canonical().bytes().fold(0x811c_9dc5u32, |h, b| (h ^ b as u32).wrapping_mul(0x0100_0193))
+        self.canonical()
+            .bytes()
+            .fold(0x811c_9dc5u32, |h, b| (h ^ b as u32).wrapping_mul(0x0100_0193))
     }
 
     pub fn canonical(&self) -> String {

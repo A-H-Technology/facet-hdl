@@ -59,7 +59,9 @@ impl<T: Facet<'static>> FromFabric<T> {
         let n = codec::words_for(self.port.ty.width());
         let words = {
             let mut bus = self.port.bus.0.lock().unwrap_or_else(|e| e.into_inner());
-            (0..n).map(|i| bus.read(self.port.word + i)).collect::<io::Result<Vec<_>>>()?
+            (0..n)
+                .map(|i| bus.read(self.port.word + i))
+                .collect::<io::Result<Vec<_>>>()?
         };
         Ok(codec::decode(&words, &self.port.ty)?)
     }
@@ -73,13 +75,21 @@ pub fn bind<B: Facet<'static>>(transport: impl Transport + 'static) -> Result<B,
     let found = transport.read(FINGERPRINT_WORD)?;
     let expected = boundary.fingerprint();
     if found != expected {
-        return Err(BindError::Fingerprint { boundary: boundary.name, expected, found });
+        return Err(BindError::Fingerprint {
+            boundary: boundary.name,
+            expected,
+            found,
+        });
     }
 
     let bus = Arc::new(Bus(Mutex::new(transport)));
     let mut p = Partial::alloc::<B>().map_err(reflect)?;
     for (i, decl) in boundary.ports.iter().enumerate() {
-        let port = Port { bus: bus.clone(), ty: decl.ty.clone(), word: decl.word };
+        let port = Port {
+            bus: bus.clone(),
+            ty: decl.ty.clone(),
+            word: decl.word,
+        };
         p = p
             .begin_nth_field(i)
             .and_then(|p| p.begin_nth_field(0))
@@ -111,7 +121,11 @@ pub enum BindError {
     #[error(
         "fabric fingerprint {found:#010x} != {expected:#010x} for `{boundary}`: the bitstream was built from a different declaration"
     )]
-    Fingerprint { boundary: &'static str, expected: u32, found: u32 },
+    Fingerprint {
+        boundary: &'static str,
+        expected: u32,
+        found: u32,
+    },
     #[error("reflection failed while binding (a facet-hdl bug): {0}")]
     Reflect(String),
 }

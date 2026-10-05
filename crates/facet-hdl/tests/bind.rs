@@ -49,7 +49,11 @@ fn fabric() -> (Mem, Boundary) {
 fn writes_land_where_the_layout_says_and_reads_decode() {
     let (mem, b) = fabric();
     let regs: Regs = bind(mem.clone()).unwrap();
-    let ctl = Wide { mode: Mode::Blink, a: 0xDEAD_BEEF, b: 7 };
+    let ctl = Wide {
+        mode: Mode::Blink,
+        a: 0xDEAD_BEEF,
+        b: 7,
+    };
     regs.ctl.write(&ctl).unwrap();
 
     // Simulate the fabric echoing ctl back on status.

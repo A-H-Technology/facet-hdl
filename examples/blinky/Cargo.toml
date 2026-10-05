@@ -9,6 +9,7 @@ publish = false
 facet.workspace = true
 facet-hdl = { path = "../../crates/facet-hdl" }
 facet-hdl-vhdl = { path = "../../crates/facet-hdl-vhdl" }
+facet-hdl-devmem = { path = "../../crates/facet-hdl-devmem" }
 
 [dev-dependencies]
 facet-hdl-ghdl = { path = "../../crates/facet-hdl-ghdl" }

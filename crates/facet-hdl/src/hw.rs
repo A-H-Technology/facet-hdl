@@ -11,13 +11,25 @@ use std::fmt;
 #[derive(Debug, Clone)]
 pub enum HwType {
     Bool,
-    Int { bits: u32, signed: bool },
+    Int {
+        bits: u32,
+        signed: bool,
+    },
     /// Fieldless enum, encoded as the variant's declaration index.
-    Enum { shape: &'static Shape, variants: Vec<&'static str> },
+    Enum {
+        shape: &'static Shape,
+        variants: Vec<&'static str>,
+    },
     /// Fields packed in declaration order, first field at the LSB.
-    Struct { shape: &'static Shape, fields: Vec<(&'static str, HwType)> },
+    Struct {
+        shape: &'static Shape,
+        fields: Vec<(&'static str, HwType)>,
+    },
     /// Elements packed in index order, element 0 at the LSB.
-    Array { elem: Box<HwType>, len: usize },
+    Array {
+        elem: Box<HwType>,
+        len: usize,
+    },
 }
 
 impl HwType {
@@ -46,9 +58,15 @@ impl HwType {
                     .map_err(|_| unsupported(path, "unsized integer"))?
                     .size();
                 if shape.id == usize::SHAPE.id || shape.id == isize::SHAPE.id {
-                    return Err(unsupported(path, "usize/isize differ between host and fabric; pick an explicit width"));
+                    return Err(unsupported(
+                        path,
+                        "usize/isize differ between host and fabric; pick an explicit width",
+                    ));
                 }
-                Ok(Self::Int { bits: bytes as u32 * 8, signed })
+                Ok(Self::Int {
+                    bits: bytes as u32 * 8,
+                    signed,
+                })
             }
             Type::Sequence(SequenceType::Array(arr)) => {
                 if arr.n == 0 {
@@ -57,16 +75,25 @@ impl HwType {
                 path.push("[]".into());
                 let elem = Self::resolve(arr.t, path, open)?;
                 path.pop();
-                Ok(Self::Array { elem: Box::new(elem), len: arr.n })
+                Ok(Self::Array {
+                    elem: Box::new(elem),
+                    len: arr.n,
+                })
             }
             Type::User(UserType::Enum(en)) => {
                 if let Some(v) = en.variants.iter().find(|v| !v.data.fields.is_empty()) {
-                    return Err(unsupported(path, &format!("variant `{}` carries data; only fieldless enums are supported", v.name)));
+                    return Err(unsupported(
+                        path,
+                        &format!("variant `{}` carries data; only fieldless enums are supported", v.name),
+                    ));
                 }
                 if en.variants.len() < 2 {
                     return Err(unsupported(path, "an enum needs at least two variants to occupy a bit"));
                 }
-                Ok(Self::Enum { shape, variants: en.variants.iter().map(|v| v.name).collect() })
+                Ok(Self::Enum {
+                    shape,
+                    variants: en.variants.iter().map(|v| v.name).collect(),
+                })
             }
             Type::User(UserType::Struct(st)) => {
                 if open.contains(&shape.id) {

@@ -29,15 +29,23 @@ fn render(ty: &HwType, words: &[u32], cursor: &mut u32) -> String {
         HwType::Int { bits, signed } => {
             let digits = (*bits as usize).div_ceil(4);
             let raw = take(*bits);
-            format!("{}'({bits}x\"{raw:0digits$X}\")", if *signed { "signed" } else { "unsigned" })
+            format!(
+                "{}'({bits}x\"{raw:0digits$X}\")",
+                if *signed { "signed" } else { "unsigned" }
+            )
         }
         HwType::Enum { variants, .. } => enum_literal(ty, variants[take(ty.width()) as usize]),
         HwType::Struct { fields, .. } => {
-            let parts: Vec<_> = fields.iter().map(|(n, f)| format!("{n} => {}", render(f, words, cursor))).collect();
+            let parts: Vec<_> = fields
+                .iter()
+                .map(|(n, f)| format!("{n} => {}", render(f, words, cursor)))
+                .collect();
             format!("({})", parts.join(", "))
         }
         HwType::Array { elem, len } => {
-            let parts: Vec<_> = (0..*len).map(|i| format!("{i} => {}", render(elem, words, cursor))).collect();
+            let parts: Vec<_> = (0..*len)
+                .map(|i| format!("{i} => {}", render(elem, words, cursor)))
+                .collect();
             format!("({})", parts.join(", "))
         }
     }

@@ -31,7 +31,13 @@ pub struct SimBuilder {
 impl Sim {
     /// `sources` in compile order; `top` is the entity the testbench drives.
     pub fn builder(workdir: impl Into<PathBuf>, top: &str, addr_width: u32) -> SimBuilder {
-        SimBuilder { workdir: workdir.into(), sources: Vec::new(), top: top.into(), addr_width, generics: Vec::new() }
+        SimBuilder {
+            workdir: workdir.into(),
+            sources: Vec::new(),
+            top: top.into(),
+            addr_width,
+            generics: Vec::new(),
+        }
     }
 
     /// Starts the simulation and waits for reset to be released.
@@ -109,7 +115,10 @@ impl Link {
         self.stdin.flush()?;
         let mut line = String::new();
         if self.stdout.read_line(&mut line)? == 0 {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, format!("simulator exited during `{cmd}`")));
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                format!("simulator exited during `{cmd}`"),
+            ));
         }
         Ok(line.trim().to_owned())
     }
@@ -136,7 +145,9 @@ impl Drop for Link {
 fn resp_err(resp: &str, what: String) -> io::Result<()> {
     match resp {
         "0" => Ok(()),
-        r => Err(io::Error::other(format!("{what}: AXI response {r} (2=SLVERR, 3=DECERR)"))),
+        r => Err(io::Error::other(format!(
+            "{what}: AXI response {r} (2=SLVERR, 3=DECERR)"
+        ))),
     }
 }
 
@@ -168,7 +179,11 @@ pub struct SimClock(Arc<Mutex<Link>>);
 impl SimClock {
     pub fn cycles(&self, n: u64) -> io::Result<()> {
         let line = self.0.lock().unwrap().send(&format!("T {n}"))?;
-        if line == "T" { Ok(()) } else { Err(io::Error::other(format!("bad tick reply {line:?}"))) }
+        if line == "T" {
+            Ok(())
+        } else {
+            Err(io::Error::other(format!("bad tick reply {line:?}")))
+        }
     }
 }
 
