@@ -2,7 +2,7 @@
 
 use blinky::*;
 use facet::Facet;
-use facet_hdl::{BindError, ToFabric, bind};
+use facet_hdl::{BindError, Boundary, HwType, ToFabric, Transport, bind, codec};
 use facet_hdl_ghdl::{Sim, SimClock, SimTransport};
 use facet_hdl_vhdl::Vhdl;
 use std::path::{Path, PathBuf};
@@ -124,4 +124,32 @@ fn a_host_built_from_another_declaration_is_refused() {
     let (transport, _clk) = sim().spawn().unwrap();
     let err = bind::<Impostor>(transport).err().expect("bind must fail");
     assert!(matches!(err, BindError::Fingerprint { .. }), "{err}");
+}
+
+fn ops(a: u32, b: u32) -> Operands {
+    Operands { a, b, negate: false }
+}
+
+#[test]
+fn interleaved_words_from_a_second_accessor_tear_and_bind_refuses_it() {
+    let (transport, _clk) = sim().spawn().unwrap();
+    let mut other = transport.share();
+    let b: Blinky = bind(transport).unwrap();
+    let layout = Boundary::of::<Blinky>().unwrap();
+    let port = layout.ports.iter().find(|p| p.name == "operands").unwrap();
+    let theirs = codec::encode(&ops(1, 2), &HwType::of(Operands::SHAPE).unwrap());
+
+    // The interleaving from #1, done through the raw transport since that's
+    // all a second process has: they start, we write whole, they finish.
+    other.write(port.word, theirs[0]).unwrap();
+    b.operands.write(&ops(100, 200)).unwrap();
+    other.write(port.word + 1, theirs[1]).unwrap();
+    other.write(port.word + 2, theirs[2]).unwrap();
+    assert_eq!(
+        b.sum.read().unwrap().value,
+        100 + 2,
+        "our `a`, their `b`: a value nobody wrote"
+    );
+
+    assert!(matches!(bind::<Blinky>(other), Err(BindError::Busy { .. })));
 }

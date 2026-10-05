@@ -8,6 +8,7 @@ use memmap2::{MmapOptions, MmapRaw};
 use std::fs::OpenOptions;
 use std::io;
 use std::os::unix::fs::OpenOptionsExt;
+use std::path::PathBuf;
 
 /// Agilex 5 lightweight HPS-to-FPGA bridge window (512 MiB). From the Altera
 /// Agilex 5 GSRD address map; a Platform Designer base address for the
@@ -17,6 +18,7 @@ pub const AGILEX5_LWH2F: u64 = 0x2000_0000;
 pub struct DevMem {
     map: MmapRaw,
     words: u32,
+    base: u64,
 }
 
 impl DevMem {
@@ -42,7 +44,7 @@ impl DevMem {
             .custom_flags(libc::O_SYNC)
             .open("/dev/mem")?;
         let map = MmapOptions::new().offset(base).len(words as usize * 4).map_raw(&file)?;
-        Ok(Self { map, words })
+        Ok(Self { map, words, base })
     }
 
     fn ptr(&self, word: u32) -> io::Result<*mut u32> {
@@ -57,6 +59,13 @@ impl DevMem {
 }
 
 impl Transport for DevMem {
+    /// Keyed on the physical base, so every process mapping this window
+    /// contends for one lock. /run/lock is root-only on NixOS, which is fine:
+    /// /dev/mem already needs root.
+    fn lock_path(&self) -> PathBuf {
+        PathBuf::from(format!("/run/lock/facet-hdl-devmem-{:#x}.lock", self.base))
+    }
+
     fn read(&mut self, word: u32) -> io::Result<u32> {
         let p = self.ptr(word)?;
         // SAFETY: in bounds of a live, 4-aligned mapping (page-aligned base,

@@ -48,10 +48,17 @@ impl Sim {
             .spawn()?;
         let stdin = child.stdin.take().expect("piped");
         let stdout = BufReader::new(child.stdout.take().expect("piped"));
+        let lock = self.workdir.join(format!("sim-{}.lock", child.id()));
         let mut link = Link { child, stdin, stdout };
         link.expect("READY")?;
         let link = Arc::new(Mutex::new(link));
-        Ok((SimTransport(link.clone()), SimClock(link)))
+        Ok((
+            SimTransport {
+                link: link.clone(),
+                lock,
+            },
+            SimClock(link),
+        ))
     }
 }
 
@@ -149,11 +156,30 @@ fn resp_err(resp: &str, what: String) -> io::Result<()> {
     }
 }
 
-pub struct SimTransport(Arc<Mutex<Link>>);
+pub struct SimTransport {
+    link: Arc<Mutex<Link>>,
+    /// One per simulator process: that process is the register window.
+    lock: PathBuf,
+}
+
+impl SimTransport {
+    /// Another handle onto the same running fabric, standing in for a second
+    /// process mapping the same bridge window.
+    pub fn share(&self) -> Self {
+        Self {
+            link: self.link.clone(),
+            lock: self.lock.clone(),
+        }
+    }
+}
 
 impl Transport for SimTransport {
+    fn lock_path(&self) -> PathBuf {
+        self.lock.clone()
+    }
+
     fn read(&mut self, word: u32) -> io::Result<u32> {
-        let line = self.0.lock().unwrap().send(&format!("R {word}"))?;
+        let line = self.link.lock().unwrap().send(&format!("R {word}"))?;
         let mut it = line.split_whitespace();
         let (Some("D"), Some(hex), Some(resp)) = (it.next(), it.next(), it.next()) else {
             return Err(io::Error::other(format!("bad read reply {line:?}")));
@@ -163,7 +189,7 @@ impl Transport for SimTransport {
     }
 
     fn write(&mut self, word: u32, value: u32) -> io::Result<()> {
-        let line = self.0.lock().unwrap().send(&format!("W {word} {value:08X}"))?;
+        let line = self.link.lock().unwrap().send(&format!("W {word} {value:08X}"))?;
         match line.strip_prefix("B ") {
             Some(resp) => resp_err(resp, format!("write word {word}")),
             None => Err(io::Error::other(format!("bad write reply {line:?}"))),

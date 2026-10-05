@@ -63,8 +63,15 @@ These are the rules `codec.rs` and the generated VHDL both implement.
   pulses once per commit.
 - A **FromFabric** read snapshots the whole value when its first word is read,
   and the later words come from that snapshot.
-- The host holds a per-bus lock across each port access to keep that
-  ordering intact.
+- Words from two accessors interleaving on one port would commit or return
+  a value neither of them meant. So a binding owns its whole register window:
+  `bind` takes an exclusive `flock` on the transport's lock file and holds it
+  until the binding is dropped. DevMem uses
+  `/run/lock/facet-hdl-devmem-<base>.lock`. A second `bind`, in the same
+  process or another one, gets `BindError::Busy`. The kernel releases the lock
+  when the holder dies, `kill -9` included. Within one binding, a mutex keeps
+  each port access contiguous. Raw `devmem` pokes bypass all of this; only a
+  kernel driver owning the window could stop them.
 
 ## Verified
 
