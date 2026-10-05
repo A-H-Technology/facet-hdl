@@ -1,0 +1,12 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+# Pinned to the rc because 0.50 is where facet's current docs and the local
+# checkout at /pool/dev/facet live; move to 0.50.0 once it's cut.
+facet = { version = "=0.50.0-rc.7", features = ["reflect"] }
