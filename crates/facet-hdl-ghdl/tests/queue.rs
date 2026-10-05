@@ -8,6 +8,7 @@ use facet_hdl_ghdl::{Sim, SimTransport};
 use facet_hdl_vhdl::Vhdl;
 use std::path::Path;
 use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 /// 64 bits: a 2-word entry, so a push commits on its second word.
 #[derive(Facet, Debug, Clone, PartialEq)]
@@ -50,7 +51,8 @@ entity pipe_top is
   port (
     clk, rst_n : in std_logic;
     axi_in : in axil_m2s_t;
-    axi_out : out axil_s2m_t
+    axi_out : out axil_s2m_t;
+    irq : out std_logic
   );
 end entity;
 
@@ -63,7 +65,7 @@ architecture rtl of pipe_top is
 begin
   regs : entity work.pipe_regs
     port map (
-      clk => clk, rst_n => rst_n, axi_in => axi_in, axi_out => axi_out,
+      clk => clk, rst_n => rst_n, axi_in => axi_in, axi_out => axi_out, irq => irq,
       jobs => job, jobs_valid => job_valid, jobs_ready => job_ready,
       done => (seq => job.seq, y => shift_left(x64, 1) + x64),
       done_valid => done_valid, done_ready => done_ready,
@@ -97,6 +99,7 @@ fn sim() -> &'static Sim {
         Sim::builder(&work, "pipe_top")
             .sources(generated)
             .source(&top)
+            .irq()
             .build()
             .unwrap()
     })
@@ -195,4 +198,48 @@ fn a_full_queue_refuses_the_push_and_leaves_the_fabric_untouched() {
     }
     assert_eq!(seqs, (0..DEPTH as u32).collect::<Vec<_>>());
     assert_eq!(p.done.pop().unwrap(), None);
+}
+
+#[test]
+fn irq_is_high_exactly_while_results_are_waiting() {
+    let (transport, _clk) = sim().spawn().unwrap();
+    let mut line = transport.share().interrupt().expect("built with .irq()");
+    let mut p: Pipe = bind(transport).unwrap();
+    let short = Duration::from_millis(50);
+
+    assert!(!line.wait(short).unwrap(), "nothing produced yet");
+    p.jobs.push(&job(0)).unwrap();
+    assert!(line.wait(Duration::from_secs(5)).unwrap(), "a result is waiting");
+    assert!(
+        line.wait(short).unwrap(),
+        "level: still high, so a late waiter can't miss it"
+    );
+    assert_eq!(p.done.pop().unwrap().map(|d| d.seq), Some(0));
+    assert!(!line.wait(short).unwrap(), "drained, so low again");
+}
+
+#[test]
+fn pop_wait_wakes_on_the_interrupt_not_the_timeout() {
+    let (transport, _clk) = sim().spawn().unwrap();
+    let mut p: Pipe = bind(transport).unwrap();
+    p.stall.write(&0b1011).unwrap();
+    let timeout = Duration::from_secs(30);
+    for seq in 0..20 {
+        p.jobs.push(&job(seq)).unwrap();
+        let started = Instant::now();
+        let d = p.done.pop_wait(timeout).unwrap().expect("result before the timeout");
+        assert_eq!(d.seq, seq);
+        assert!(started.elapsed() < timeout / 10, "woke late: {:?}", started.elapsed());
+    }
+}
+
+#[test]
+fn pop_wait_gives_up_at_the_timeout() {
+    let (transport, _clk) = sim().spawn().unwrap();
+    let mut p: Pipe = bind(transport).unwrap();
+    p.stall.write(&u32::MAX).unwrap();
+    p.jobs.push(&job(0)).unwrap();
+    let started = Instant::now();
+    assert_eq!(p.done.pop_wait(Duration::from_millis(300)).unwrap(), None);
+    assert!(started.elapsed() >= Duration::from_millis(300));
 }

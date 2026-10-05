@@ -25,7 +25,7 @@ pub fn generate(b: &Boundary, ns: &mut Namespace) -> Result<String, NameError> {
     let pkg = package_name(b);
     let stem = snake(b.name);
     ns.claim(&entity, format!("the register entity for `{}`", b.name))?;
-    for p in ["clk", "rst_n", "axi_in", "axi_out"] {
+    for p in ["clk", "rst_n", "axi_in", "axi_out", "irq"] {
         ns.claim(p, "the bus interface")?;
     }
     for internal in ["word", "s2m"] {
@@ -187,6 +187,8 @@ entity {entity} is
     rst_n   : in  std_logic;
     axi_in  : in  axil_m2s_t;
     axi_out : out axil_s2m_t;
+    -- Level-sensitive: high while any fabric -> host queue holds an entry.
+    irq     : out std_logic;
 
 {ports}  );
 end entity;
@@ -198,6 +200,7 @@ architecture rtl of {entity} is
   signal s2m : axil_s2m_t := axil_s2m_idle;
 {signals}begin
   axi_out <= s2m;
+  irq <= {irq};
 {outputs}
   -- One transaction per channel in flight. Ready is raised for exactly one
   -- cycle after valid is seen, and the handshake cycle is where the access
@@ -257,6 +260,7 @@ end architecture;
 "#,
         name = b.name,
         fp_word = FINGERPRINT_WORD,
+        irq = irq_expr(b),
         strobe_clear = b
             .ports
             .iter()
@@ -460,4 +464,19 @@ fn queue_port(p: &PortDecl, depth: u32, ns: &mut Namespace) -> Result<Parts, Nam
         }
     }
     Ok(out)
+}
+
+/// OR of "non-empty" over every fabric -> host queue; constant low without one.
+fn irq_expr(b: &Boundary) -> String {
+    let pending: Vec<_> = b
+        .ports
+        .iter()
+        .filter(|p| p.direction == Direction::FromFabric && matches!(p.kind, PortKind::Queue { .. }))
+        .map(|p| format!("{0}_head /= {0}_tail", p.name))
+        .collect();
+    if pending.is_empty() {
+        "'0'".into()
+    } else {
+        format!("'1' when {} else '0'", pending.join(" or "))
+    }
 }

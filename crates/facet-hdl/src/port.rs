@@ -20,6 +20,26 @@ pub trait Transport: Send {
     /// window. Every transport reaching the same window must name the same
     /// file; `bind` holds the lock for as long as the binding lives.
     fn lock_path(&self) -> PathBuf;
+
+    /// The boundary's `irq` line, if this transport can wait on it. `bind`
+    /// takes it once; without one, waiting falls back to polling.
+    fn interrupt(&mut self) -> Option<Box<dyn Interrupt>> {
+        None
+    }
+}
+
+/// The generated `irq` output: high while any `FromFabricQueue` holds an
+/// entry.
+///
+/// Level, not edge, is the whole point. A consumer checks its queue, finds it
+/// empty and goes to wait; if the entry lands in between, the line is already
+/// high when the wait starts and the wait returns at once. An edge would have
+/// come and gone, and the wakeup would be lost.
+pub trait Interrupt: Send {
+    /// Returns `true` as soon as the line is high (immediately if it already
+    /// is), `false` once `timeout` passes with it low. Spurious `true`s are
+    /// allowed; callers re-check their queue either way.
+    fn wait(&mut self, timeout: Duration) -> io::Result<bool>;
 }
 
 /// Multi-word ports are why both locks exist: the fabric only commits a write
@@ -32,14 +52,31 @@ pub trait Transport: Send {
 /// set after a crash). One edge: a fork elsewhere in this process copies the
 /// fd, so until that child execs (or forever, if it never does) the lock
 /// outlives this binding.
+///
+/// The interrupt has its own lock so a blocked waiter never holds up register
+/// traffic on other ports.
 struct Bus {
     transport: Mutex<Box<dyn Transport>>,
+    irq: Option<Mutex<Box<dyn Interrupt>>>,
     _owner: File,
 }
 
 impl Bus {
     fn lock(&self) -> std::sync::MutexGuard<'_, Box<dyn Transport>> {
         self.transport.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Sleeps until the irq line might mean there's work, or `timeout`.
+    fn wait_irq(&self, timeout: Duration) -> io::Result<()> {
+        match &self.irq {
+            Some(irq) => irq.lock().unwrap_or_else(|e| e.into_inner()).wait(timeout).map(drop),
+            // No line to sleep on: give other threads the CPU and let the
+            // caller poll again.
+            None => {
+                std::thread::yield_now();
+                Ok(())
+            }
+        }
     }
 }
 
@@ -236,6 +273,28 @@ impl<T: Facet<'static>, const N: usize> FromFabricQueue<T, N> {
         self.tail = next;
         Ok(Some(codec::decode(&words, &self.port.ty)?))
     }
+
+    /// Like [`pop`](Self::pop), but sleeps on the boundary's interrupt until
+    /// an entry arrives or `timeout` passes (`Ok(None)`). Without an
+    /// interrupt from the transport it polls instead, so it works anywhere.
+    ///
+    /// One line serves every `FromFabricQueue` in the boundary, so a waiter
+    /// can be woken by another queue's entry; it re-checks its own and sleeps
+    /// again. While that other entry sits unconsumed the line stays high, so
+    /// keep every such queue drained or it turns this into polling.
+    pub fn pop_wait(&mut self, timeout: Duration) -> Result<Option<T>, PortError> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Some(v) = self.pop()? {
+                return Ok(Some(v));
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Ok(None);
+            }
+            self.port.bus.wait_irq(left)?;
+        }
+    }
 }
 
 /// Turn a boundary declaration into live handles over `transport`, after
@@ -255,6 +314,7 @@ pub fn bind<B: Facet<'static>>(transport: impl Transport + 'static) -> Result<B,
     }
 
     let bus = Arc::new(Bus {
+        irq: transport.interrupt().map(Mutex::new),
         transport: Mutex::new(transport),
         _owner: owner,
     });

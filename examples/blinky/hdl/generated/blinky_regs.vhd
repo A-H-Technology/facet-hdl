@@ -12,6 +12,8 @@ entity blinky_regs is
     rst_n   : in  std_logic;
     axi_in  : in  axil_m2s_t;
     axi_out : out axil_s2m_t;
+    -- Level-sensitive: high while any fabric -> host queue holds an entry.
+    irq     : out std_logic;
 
     -- Host -> fabric, words 1..=1
     leds : out led_control_t;
@@ -38,6 +40,7 @@ architecture rtl of blinky_regs is
   signal sum_snap : std_logic_vector(95 downto 0) := (others => '0');
 begin
   axi_out <= s2m;
+  irq <= '0';
   leds <= to_led_control_t(leds_reg(25 downto 0));
   operands <= to_operands_t(operands_reg(64 downto 0));
 

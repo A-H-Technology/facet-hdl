@@ -8,15 +8,17 @@
 //! `axi_out : out axil_s2m_t`. Any other outputs are left open, so a full top level
 //! with LEDs etc. works as-is; extra inputs need default values.
 
-use facet_hdl::Transport;
+use facet_hdl::{Interrupt, Transport};
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 const TB: &str = "facet_hdl_tb";
 
 pub struct Sim {
+    irq: bool,
     workdir: PathBuf,
 }
 
@@ -25,6 +27,7 @@ pub struct SimBuilder {
     sources: Vec<PathBuf>,
     top: String,
     generics: Vec<(String, String)>,
+    irq: bool,
 }
 
 impl Sim {
@@ -35,6 +38,7 @@ impl Sim {
             sources: Vec::new(),
             top: top.into(),
             generics: Vec::new(),
+            irq: false,
         }
     }
 
@@ -59,6 +63,7 @@ impl Sim {
             SimTransport {
                 link: link.clone(),
                 lock,
+                irq: self.irq,
             },
             SimClock(link),
         ))
@@ -82,11 +87,19 @@ impl SimBuilder {
         self
     }
 
+    /// The top has an `irq : out std_logic` (normally the generated register
+    /// file's, passed straight up); the transport then offers it as an
+    /// [`Interrupt`].
+    pub fn irq(mut self) -> Self {
+        self.irq = true;
+        self
+    }
+
     /// Analyzes and elaborates everything into `workdir`.
     pub fn build(self) -> io::Result<Sim> {
         std::fs::create_dir_all(&self.workdir)?;
         let tb = self.workdir.join(format!("{TB}.vhd"));
-        std::fs::write(&tb, testbench(&self.top, &self.generics))?;
+        std::fs::write(&tb, testbench(&self.top, &self.generics, self.irq))?;
         let wd = format!("--workdir={}", self.workdir.display());
         let mut analyze = Command::new("ghdl");
         analyze.args(["-a", "--std=08", &wd]).args(&self.sources).arg(&tb);
@@ -94,7 +107,10 @@ impl SimBuilder {
         let mut elab = Command::new("ghdl");
         elab.args(["-e", "--std=08", &wd, TB]).current_dir(&self.workdir);
         run(elab)?;
-        Ok(Sim { workdir: self.workdir })
+        Ok(Sim {
+            workdir: self.workdir,
+            irq: self.irq,
+        })
     }
 }
 
@@ -176,6 +192,7 @@ pub struct SimTransport {
     link: Arc<Mutex<Link>>,
     /// One per simulator process: that process is the register window.
     lock: PathBuf,
+    irq: bool,
 }
 
 impl SimTransport {
@@ -185,11 +202,17 @@ impl SimTransport {
         Self {
             link: self.link.clone(),
             lock: self.lock.clone(),
+            irq: self.irq,
         }
     }
 }
 
 impl Transport for SimTransport {
+    fn interrupt(&mut self) -> Option<Box<dyn Interrupt>> {
+        self.irq
+            .then(|| Box::new(SimInterrupt(self.link.clone())) as Box<dyn Interrupt>)
+    }
+
     fn lock_path(&self) -> PathBuf {
         self.lock.clone()
     }
@@ -227,7 +250,8 @@ impl SimClock {
     }
 }
 
-fn testbench(top: &str, generics: &[(String, String)]) -> String {
+fn testbench(top: &str, generics: &[(String, String)], irq: bool) -> String {
+    let irq_assoc = if irq { ", irq => irq" } else { "" };
     // An empty `generic map ()` is a syntax error, so omit the clause entirely.
     let generic_map = if generics.is_empty() {
         String::new()
@@ -241,6 +265,7 @@ fn testbench(top: &str, generics: &[(String, String)]) -> String {
 --   W <word> <hex32>  -> "B <resp>"
 --   R <word>          -> "D <hex32> <resp>"
 --   T <cycles>        -> "T"
+--   I <cycles>        -> "I <0|1>": waits up to <cycles> for irq, then reports it
 --   Q                 -> ends the simulation
 library ieee;
 use ieee.std_logic_1164.all;
@@ -257,11 +282,12 @@ architecture sim of {TB} is
   signal rst_n : std_logic := '0';
   signal m : axil_m2s_t := axil_m2s_idle;
   signal s : axil_s2m_t;
+  signal irq : std_logic := '0';
 begin
   clk <= not clk after 5 ns;
 
   dut : entity work.{top}{generic_map}
-    port map (clk => clk, rst_n => rst_n, axi_in => m, axi_out => s);
+    port map (clk => clk, rst_n => rst_n, axi_in => m, axi_out => s{irq_assoc});
 
   driver : process
     variable l : line;
@@ -339,6 +365,14 @@ begin
             wait until rising_edge(clk);
           end loop;
           write(o, string'("@@ T"));
+        when 'I' =>
+          read(l, n);
+          for i in 1 to n loop
+            exit when irq = '1';
+            wait until rising_edge(clk);
+          end loop;
+          write(o, string'("@@ I "));
+          write(o, to_integer(unsigned'("" & irq)));
         when others =>
           finish;
       end case;
@@ -350,4 +384,28 @@ begin
 end architecture;
 "#
     )
+}
+
+/// The top's `irq`, sampled by letting the simulator run until it rises.
+/// Simulated time only advances while a wait is in progress, in bounded
+/// slices so the link stays available to register traffic in between.
+struct SimInterrupt(Arc<Mutex<Link>>);
+
+impl Interrupt for SimInterrupt {
+    fn wait(&mut self, timeout: Duration) -> io::Result<bool> {
+        const SLICE_CYCLES: u32 = 64;
+        let deadline = Instant::now() + timeout;
+        // The first check runs zero cycles: a line that's already high must
+        // return without letting time pass.
+        let mut cycles = 0;
+        loop {
+            let line = self.0.lock().unwrap().send(&format!("I {cycles}"))?;
+            match line.as_str() {
+                "I 1" => return Ok(true),
+                "I 0" if Instant::now() >= deadline => return Ok(false),
+                "I 0" => cycles = SLICE_CYCLES,
+                other => return Err(io::Error::other(format!("bad irq reply {other:?}"))),
+            }
+        }
+    }
 }
