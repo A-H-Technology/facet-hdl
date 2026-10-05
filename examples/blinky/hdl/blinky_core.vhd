@@ -8,7 +8,11 @@ use work.blinky_pkg.all;
 
 entity blinky_core is
   generic (
-    CLK_HZ : positive := 100_000_000
+    CLK_HZ : positive := 100_000_000;
+    -- Extra cycles before `sum` reflects an `operands` write. Stands in for a
+    -- real multi-cycle computation, so tests can show why the host has to
+    -- wait on `sum.calls` instead of reading straight after writing.
+    RESULT_LATENCY : natural := 0
   );
   port (
     clk     : in  std_logic;
@@ -35,6 +39,9 @@ architecture rtl of blinky_core is
   signal led_i   : unsigned(7 downto 0) := (others => '0');
   signal value   : signed(63 downto 0) := (others => '0');
   signal calls   : unsigned(15 downto 0) := (others => '0');
+  signal pending   : std_logic := '0';
+  signal countdown : natural range 0 to RESULT_LATENCY := 0;
+  signal result    : signed(63 downto 0) := (others => '0');
 begin
   regs : entity work.blinky_regs
     port map (
@@ -63,6 +70,7 @@ begin
         led_i   <= (others => '0');
         value   <= (others => '0');
         calls   <= (others => '0');
+        pending <= '0';
       else
         if ms_div = MS_CYCLES - 1 then
           ms_div  <= 0;
@@ -95,12 +103,23 @@ begin
         end case;
 
         if operands_written = '1' then
-          calls <= calls + 1;
           total := resize(operands.a, 64) + resize(operands.b, 64);
           if operands.negate = '1' then
-            value <= -signed(total);
+            result <= -signed(total);
           else
-            value <= signed(total);
+            result <= signed(total);
+          end if;
+          countdown <= RESULT_LATENCY;
+          pending <= '1';
+        elsif pending = '1' then
+          if countdown = 0 then
+            -- value and calls move together, so a host that sees the new
+            -- generation also sees its value.
+            value   <= result;
+            calls   <= calls + 1;
+            pending <= '0';
+          else
+            countdown <= countdown - 1;
           end if;
         end if;
       end if;

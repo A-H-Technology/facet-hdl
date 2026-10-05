@@ -9,6 +9,7 @@ use std::io;
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// Word-addressed access to a boundary's register window.
 pub trait Transport: Send {
@@ -103,6 +104,23 @@ impl<T: Facet<'static>> FromFabric<T> {
         };
         Ok(codec::decode(&words, &self.port.ty)?)
     }
+
+    /// Re-reads until `done` accepts the value. A read returns whatever the
+    /// fabric drives *now*, never a response to an earlier write, so
+    /// request/response over plain ports needs a field the fabric changes
+    /// once its answer is valid (a generation counter) and this to wait for it.
+    pub fn read_until(&self, timeout: Duration, mut done: impl FnMut(&T) -> bool) -> Result<T, PortError> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let value = self.read()?;
+            if done(&value) {
+                return Ok(value);
+            }
+            if Instant::now() >= deadline {
+                return Err(PortError::Timeout(timeout));
+            }
+        }
+    }
 }
 
 /// Turn a boundary declaration into live handles over `transport`, after
@@ -152,6 +170,8 @@ pub enum PortError {
     Io(#[from] io::Error),
     #[error(transparent)]
     Decode(#[from] DecodeError),
+    #[error("the fabric did not produce the awaited value within {0:?}")]
+    Timeout(Duration),
 }
 
 #[derive(Debug, thiserror::Error)]

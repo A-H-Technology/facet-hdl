@@ -7,26 +7,38 @@ use facet_hdl_ghdl::{Sim, SimClock, SimTransport};
 use facet_hdl_vhdl::Vhdl;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::time::Duration;
 
 fn hdl() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("hdl")
 }
 
+fn build(name: &str, result_latency: u32) -> Sim {
+    let work = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let generated = Vhdl::of::<Blinky>().unwrap().write_to(&work.join("gen")).unwrap();
+    Sim::builder(&work, "blinky_core")
+        // One cycle per millisecond keeps "uptime" and "period" cheap to simulate.
+        .generic("CLK_HZ", "1000")
+        .generic("RESULT_LATENCY", &result_latency.to_string())
+        .sources(generated)
+        .source(hdl().join("blinky_core.vhd"))
+        .build()
+        .expect("GHDL build (run inside `nix develop`)")
+}
+
 /// Built once per test binary; each test spawns its own simulator process.
 fn sim() -> &'static Sim {
     static SIM: OnceLock<Sim> = OnceLock::new();
-    SIM.get_or_init(|| {
-        let work = Path::new(env!("CARGO_TARGET_TMPDIR")).join("blinky-sim");
-        let generated = Vhdl::of::<Blinky>().unwrap().write_to(&work.join("gen")).unwrap();
-        Sim::builder(&work, "blinky_core")
-            // One cycle per millisecond keeps "uptime" and "period" cheap to simulate.
-            .generic("CLK_HZ", "1000")
-            .sources(generated)
-            .source(hdl().join("blinky_core.vhd"))
-            .build()
-            .expect("GHDL build (run inside `nix develop`)")
-    })
+    SIM.get_or_init(|| build("blinky-sim", 0))
 }
+
+/// An adder slower than a 3-word AXI read round trip (~12 cycles).
+fn slow_sim() -> &'static Sim {
+    static SIM: OnceLock<Sim> = OnceLock::new();
+    SIM.get_or_init(|| build("blinky-sim-slow", 200))
+}
+
+const WAIT: Duration = Duration::from_secs(5);
 
 fn spawn() -> (Blinky, SimClock) {
     let (transport, clock): (SimTransport, SimClock) = sim().spawn().unwrap();
@@ -50,28 +62,39 @@ fn checked_in_vhdl_matches_the_declaration() {
 #[test]
 fn multi_word_write_commits_once_and_the_sum_comes_back_signed() {
     let (b, _clk) = spawn();
-    b.operands
-        .write(&Operands {
-            a: u32::MAX,
-            b: 1,
-            negate: true,
-        })
-        .unwrap();
+    let neg = Operands {
+        a: u32::MAX,
+        b: 1,
+        negate: true,
+    };
     assert_eq!(
-        b.sum.read().unwrap(),
+        add(&b, &neg, WAIT).unwrap(),
         Sum {
             value: -(1i64 << 32),
             calls: 1
         }
     );
-    b.operands
-        .write(&Operands {
-            a: 40,
-            b: 2,
-            negate: false,
-        })
-        .unwrap();
-    assert_eq!(b.sum.read().unwrap(), Sum { value: 42, calls: 2 });
+    assert_eq!(add(&b, &ops(40, 2), WAIT).unwrap(), Sum { value: 42, calls: 2 });
+}
+
+#[test]
+fn a_read_straight_after_a_write_is_stale_when_the_fabric_is_slow() {
+    let (transport, _clk) = slow_sim().spawn().unwrap();
+    let b: Blinky = bind(transport).unwrap();
+
+    // The pattern #2 is about: it "works" only while the fabric beats the bus.
+    b.operands.write(&ops(40, 2)).unwrap();
+    assert_eq!(
+        b.sum.read().unwrap(),
+        Sum { value: 0, calls: 0 },
+        "the old value, silently"
+    );
+
+    // Waiting on the generation counter is right regardless of latency. The
+    // (40, 2) request was still in flight and this write replaced it in the
+    // mailbox, so it never completes: one generation, not two. Plain ports
+    // can't hold two requests; that's what queue ports (#3) are for.
+    assert_eq!(add(&b, &ops(1, 2), WAIT).unwrap(), Sum { value: 3, calls: 1 });
 }
 
 #[test]

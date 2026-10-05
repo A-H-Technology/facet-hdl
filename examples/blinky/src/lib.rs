@@ -2,7 +2,8 @@
 //! `hdl/generated/` and the host's handles both come from this file.
 
 use facet::Facet;
-use facet_hdl::{FromFabric, ToFabric};
+use facet_hdl::{FromFabric, PortError, ToFabric};
+use std::time::Duration;
 
 #[derive(Facet, Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -39,7 +40,8 @@ pub struct Operands {
 #[derive(Facet, Debug, Clone, PartialEq, Eq)]
 pub struct Sum {
     pub value: i64,
-    /// How many times `operands` has been written.
+    /// Generation counter: bumped together with `value` once the sum for a
+    /// new `operands` write is valid. Wait for it to change; see [`add`].
     pub calls: u16,
 }
 
@@ -49,4 +51,15 @@ pub struct Blinky {
     pub status: FromFabric<LedStatus>,
     pub operands: ToFabric<Operands>,
     pub sum: FromFabric<Sum>,
+}
+
+/// One request/response round trip. Reading `sum` straight after writing
+/// `operands` would only be right if the fabric happened to finish within the
+/// read's bus latency; waiting for `calls` to move makes it right regardless.
+/// Needs the binding to be the only writer of `operands`, which `bind`'s
+/// window lock guarantees.
+pub fn add(b: &Blinky, operands: &Operands, timeout: Duration) -> Result<Sum, PortError> {
+    let before = b.sum.read()?.calls;
+    b.operands.write(operands)?;
+    b.sum.read_until(timeout, |s| s.calls != before)
 }

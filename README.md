@@ -63,6 +63,13 @@ These are the rules `codec.rs` and the generated VHDL both implement.
   pulses once per commit.
 - A **FromFabric** read snapshots the whole value when its first word is read,
   and the later words come from that snapshot.
+- A `FromFabric` read returns what the fabric drives *now*. It is not a
+  response to an earlier `ToFabric` write, however close together the two
+  are. Request/response over plain ports needs a field the fabric bumps once
+  the answer is valid (a generation counter, like `Sum::calls`), and the host
+  waits for it with `FromFabric::read_until`; `blinky::add` shows the pattern.
+  A `ToFabric` port is a mailbox, so a write replaces a request still in
+  flight. Queue ports are for traffic that can't lose messages.
 - Words from two accessors interleaving on one port would commit or return
   a value neither of them meant. So a binding owns its whole register window:
   `bind` takes an exclusive `flock` on the transport's lock file and holds it

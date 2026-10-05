@@ -9,6 +9,7 @@ use blinky::{Blinky, LedControl, Operands, Pattern};
 use facet_hdl::bind;
 use facet_hdl_devmem::{AGILEX5_LWH2F, DevMem};
 use std::process::ExitCode;
+use std::time::Duration;
 
 const USAGE: &str = "usage: blinky [--base ADDR] status | leds PATTERN [MASK] [PERIOD_MS] | add A B [--negate]";
 
@@ -81,10 +82,7 @@ fn run(base: u64, cmd: Cmd) -> Result<(), Error> {
             b.leds.write(&ctl)?;
             println!("{:#?}", b.status.read()?);
         }
-        Cmd::Add(ops) => {
-            b.operands.write(&ops)?;
-            println!("{:#?}", b.sum.read()?);
-        }
+        Cmd::Add(ops) => println!("{:#?}", blinky::add(&b, &ops, Duration::from_millis(100))?),
     }
     Ok(())
 }
