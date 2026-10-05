@@ -18,7 +18,7 @@ fn sim() -> &'static Sim {
     SIM.get_or_init(|| {
         let work = Path::new(env!("CARGO_TARGET_TMPDIR")).join("blinky-sim");
         let generated = Vhdl::of::<Blinky>().unwrap().write_to(&work.join("gen")).unwrap();
-        Sim::builder(&work, "blinky_core", 6)
+        Sim::builder(&work, "blinky_core")
             // One cycle per millisecond keeps "uptime" and "period" cheap to simulate.
             .generic("CLK_HZ", "1000")
             .sources(generated)
@@ -35,12 +35,16 @@ fn spawn() -> (Blinky, SimClock) {
 
 #[test]
 fn checked_in_vhdl_matches_the_declaration() {
-    let v = Vhdl::of::<Blinky>().unwrap();
-    let on_disk = |name: &str| std::fs::read_to_string(hdl().join("generated").join(format!("{name}.vhd"))).unwrap();
-    assert!(
-        on_disk(&v.package_name) == v.package && on_disk(&v.entity_name) == v.entity,
-        "hdl/generated is stale; run `cargo run --bin blinky-gen`"
-    );
+    let fresh = Path::new(env!("CARGO_TARGET_TMPDIR")).join("blinky-fresh");
+    for path in Vhdl::of::<Blinky>().unwrap().write_to(&fresh).unwrap() {
+        let name = path.file_name().unwrap();
+        let checked_in = std::fs::read_to_string(hdl().join("generated").join(name)).unwrap_or_default();
+        assert!(
+            checked_in == std::fs::read_to_string(&path).unwrap(),
+            "hdl/generated/{} is stale; run `cargo run --bin blinky-gen`",
+            name.display()
+        );
+    }
 }
 
 #[test]

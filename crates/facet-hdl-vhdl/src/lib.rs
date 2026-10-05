@@ -1,6 +1,7 @@
 //! VHDL-2008 from a [`facet_hdl::Boundary`]: a package with one type per Rust
 //! type, and an AXI4-Lite register file entity whose ports are those types.
 
+mod axil;
 mod literal;
 mod names;
 mod package;
@@ -13,7 +14,7 @@ use std::path::{Path, PathBuf};
 pub use literal::literal;
 pub use names::NameError;
 pub use package::package_name;
-pub use regs::{entity_name, min_addr_width};
+pub use regs::entity_name;
 
 pub struct Vhdl {
     pub package_name: String,
@@ -29,6 +30,9 @@ impl Vhdl {
 
     pub fn from_boundary(b: &Boundary) -> Result<Self, Error> {
         let mut ns = names::Namespace::default();
+        for n in axil::NAMES {
+            ns.claim(n, "the AXI4-Lite package")?;
+        }
         Ok(Self {
             package_name: package_name(b),
             package: package::generate(b, &mut ns)?,
@@ -37,14 +41,20 @@ impl Vhdl {
         })
     }
 
-    /// Writes `<pkg>.vhd` and `<entity>.vhd` into `dir`, in that (compile) order.
-    pub fn write_to(&self, dir: &Path) -> std::io::Result<[PathBuf; 2]> {
+    /// Writes the bus package, `<pkg>.vhd` and `<entity>.vhd` into `dir`, in
+    /// that (compile) order.
+    pub fn write_to(&self, dir: &Path) -> std::io::Result<[PathBuf; 3]> {
         std::fs::create_dir_all(dir)?;
-        let pkg = dir.join(format!("{}.vhd", self.package_name));
-        let ent = dir.join(format!("{}.vhd", self.entity_name));
-        std::fs::write(&pkg, &self.package)?;
-        std::fs::write(&ent, &self.entity)?;
-        Ok([pkg, ent])
+        let files = [
+            (axil::PACKAGE_NAME, axil::PACKAGE),
+            (&self.package_name, &self.package),
+            (&self.entity_name, &self.entity),
+        ]
+        .map(|(name, text)| (dir.join(format!("{name}.vhd")), text));
+        for (path, text) in &files {
+            std::fs::write(path, text)?;
+        }
+        Ok(files.map(|(path, _)| path))
     }
 }
 

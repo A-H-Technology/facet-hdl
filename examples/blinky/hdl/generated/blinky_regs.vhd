@@ -3,34 +3,15 @@
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
+use work.facet_hdl_axil_pkg.all;
 use work.blinky_pkg.all;
 
 entity blinky_regs is
-  generic (
-    -- Byte-address width; wider than the minimum is fine, the full width is decoded.
-    ADDR_WIDTH : positive := 6
-  );
   port (
-    clk   : in std_logic;
-    rst_n : in std_logic;
-
-    s_axi_awaddr  : in  std_logic_vector(ADDR_WIDTH - 1 downto 0);
-    s_axi_awvalid : in  std_logic;
-    s_axi_awready : out std_logic;
-    s_axi_wdata   : in  std_logic_vector(31 downto 0);
-    s_axi_wstrb   : in  std_logic_vector(3 downto 0);
-    s_axi_wvalid  : in  std_logic;
-    s_axi_wready  : out std_logic;
-    s_axi_bresp   : out std_logic_vector(1 downto 0);
-    s_axi_bvalid  : out std_logic;
-    s_axi_bready  : in  std_logic;
-    s_axi_araddr  : in  std_logic_vector(ADDR_WIDTH - 1 downto 0);
-    s_axi_arvalid : in  std_logic;
-    s_axi_arready : out std_logic;
-    s_axi_rdata   : out std_logic_vector(31 downto 0);
-    s_axi_rresp   : out std_logic_vector(1 downto 0);
-    s_axi_rvalid  : out std_logic;
-    s_axi_rready  : in  std_logic;
+    clk     : in  std_logic;
+    rst_n   : in  std_logic;
+    axi_in  : in  axil_m2s_t;
+    axi_out : out axil_s2m_t;
 
     -- Host -> fabric, words 1..=1
     leds : out led_control_t;
@@ -49,23 +30,14 @@ architecture rtl of blinky_regs is
   constant OKAY   : std_logic_vector(1 downto 0) := "00";
   constant SLVERR : std_logic_vector(1 downto 0) := "10";
 
-  signal awready_i, wready_i, bvalid_i, arready_i, rvalid_i : std_logic := '0';
-  signal bresp_i, rresp_i : std_logic_vector(1 downto 0) := OKAY;
-  signal rdata_i : std_logic_vector(31 downto 0) := (others => '0');
+  signal s2m : axil_s2m_t := axil_s2m_idle;
   signal leds_reg : std_logic_vector(25 downto 0) := (others => '0');
   signal status_snap : std_logic_vector(95 downto 0) := (others => '0');
   signal operands_reg : std_logic_vector(64 downto 0) := (others => '0');
   signal operands_shadow : std_logic_vector(63 downto 0) := (others => '0');
   signal sum_snap : std_logic_vector(95 downto 0) := (others => '0');
 begin
-  s_axi_awready <= awready_i;
-  s_axi_wready  <= wready_i;
-  s_axi_bvalid  <= bvalid_i;
-  s_axi_bresp   <= bresp_i;
-  s_axi_arready <= arready_i;
-  s_axi_rvalid  <= rvalid_i;
-  s_axi_rresp   <= rresp_i;
-  s_axi_rdata   <= rdata_i;
+  axi_out <= s2m;
   leds <= to_led_control_t(leds_reg(25 downto 0));
   operands <= to_operands_t(operands_reg(64 downto 0));
 
@@ -80,100 +52,100 @@ begin
     variable sum_full : std_logic_vector(95 downto 0);
   begin
     if rising_edge(clk) then
-      awready_i <= '0';
-      wready_i  <= '0';
-      arready_i <= '0';
+      s2m.awready <= '0';
+      s2m.wready  <= '0';
+      s2m.arready <= '0';
       leds_written <= '0';
       operands_written <= '0';
 
       if rst_n = '0' then
-        bvalid_i <= '0';
-        rvalid_i <= '0';
+        s2m.bvalid <= '0';
+        s2m.rvalid <= '0';
           leds_reg <= (others => '0');
           leds_written <= '0';
           operands_reg <= (others => '0');
           operands_written <= '0';
       else
-        if bvalid_i = '1' then
-          if s_axi_bready = '1' then
-            bvalid_i <= '0';
+        if s2m.bvalid = '1' then
+          if axi_in.bready = '1' then
+            s2m.bvalid <= '0';
           end if;
-        elsif awready_i = '1' then
-          word := to_integer(unsigned(s_axi_awaddr(ADDR_WIDTH - 1 downto 2)));
-          bvalid_i <= '1';
-          bresp_i <= OKAY;
+        elsif s2m.awready = '1' then
+          word := to_integer(unsigned(axi_in.awaddr(31 downto 2)));
+          s2m.bvalid <= '1';
+          s2m.bresp <= OKAY;
           case word is
             when 1 =>
-              leds_full := s_axi_wdata;
+              leds_full := axi_in.wdata;
               leds_reg <= leds_full(25 downto 0);
               leds_written <= '1';
             when 5 =>
-              operands_shadow(31 downto 0) <= s_axi_wdata;
+              operands_shadow(31 downto 0) <= axi_in.wdata;
             when 6 =>
-              operands_shadow(63 downto 32) <= s_axi_wdata;
+              operands_shadow(63 downto 32) <= axi_in.wdata;
             when 7 =>
-              operands_full := s_axi_wdata & operands_shadow;
+              operands_full := axi_in.wdata & operands_shadow;
               operands_reg <= operands_full(64 downto 0);
               operands_written <= '1';
             when others =>
-              bresp_i <= SLVERR;
+              s2m.bresp <= SLVERR;
           end case;
-        elsif s_axi_awvalid = '1' and s_axi_wvalid = '1' then
-          awready_i <= '1';
-          wready_i  <= '1';
+        elsif axi_in.awvalid = '1' and axi_in.wvalid = '1' then
+          s2m.awready <= '1';
+          s2m.wready  <= '1';
         end if;
 
-        if rvalid_i = '1' then
-          if s_axi_rready = '1' then
-            rvalid_i <= '0';
+        if s2m.rvalid = '1' then
+          if axi_in.rready = '1' then
+            s2m.rvalid <= '0';
           end if;
-        elsif arready_i = '1' then
-          word := to_integer(unsigned(s_axi_araddr(ADDR_WIDTH - 1 downto 2)));
-          rvalid_i <= '1';
-          rresp_i <= OKAY;
+        elsif s2m.arready = '1' then
+          word := to_integer(unsigned(axi_in.araddr(31 downto 2)));
+          s2m.rvalid <= '1';
+          s2m.rresp <= OKAY;
           case word is
             when 0 =>
-              rdata_i <= blinky_fingerprint;
+              s2m.rdata <= blinky_fingerprint;
             when 1 =>
               leds_full := (others => '0');
               leds_full(25 downto 0) := leds_reg;
-              rdata_i <= leds_full(31 downto 0);
+              s2m.rdata <= leds_full(31 downto 0);
             when 2 =>
               status_full := (others => '0');
               status_full(73 downto 0) := to_slv(status);
-              rdata_i <= status_full(31 downto 0);
+              s2m.rdata <= status_full(31 downto 0);
               status_snap <= status_full;
             when 3 =>
-              rdata_i <= status_snap(63 downto 32);
+              s2m.rdata <= status_snap(63 downto 32);
             when 4 =>
-              rdata_i <= status_snap(95 downto 64);
+              s2m.rdata <= status_snap(95 downto 64);
             when 5 =>
               operands_full := (others => '0');
               operands_full(64 downto 0) := operands_reg;
-              rdata_i <= operands_full(31 downto 0);
+              s2m.rdata <= operands_full(31 downto 0);
             when 6 =>
               operands_full := (others => '0');
               operands_full(64 downto 0) := operands_reg;
-              rdata_i <= operands_full(63 downto 32);
+              s2m.rdata <= operands_full(63 downto 32);
             when 7 =>
               operands_full := (others => '0');
               operands_full(64 downto 0) := operands_reg;
-              rdata_i <= operands_full(95 downto 64);
+              s2m.rdata <= operands_full(95 downto 64);
             when 8 =>
               sum_full := (others => '0');
               sum_full(79 downto 0) := to_slv(sum);
-              rdata_i <= sum_full(31 downto 0);
+              s2m.rdata <= sum_full(31 downto 0);
               sum_snap <= sum_full;
             when 9 =>
-              rdata_i <= sum_snap(63 downto 32);
+              s2m.rdata <= sum_snap(63 downto 32);
             when 10 =>
-              rdata_i <= sum_snap(95 downto 64);
+              s2m.rdata <= sum_snap(95 downto 64);
             when others =>
-              rdata_i <= (others => '0');
-              rresp_i <= SLVERR;
+              s2m.rdata <= (others => '0');
+              s2m.rresp <= SLVERR;
           end case;
-        elsif s_axi_arvalid = '1' then
-          arready_i <= '1';
+        elsif axi_in.arvalid = '1' then
+          s2m.arready <= '1';
         end if;
       end if;
     end if;

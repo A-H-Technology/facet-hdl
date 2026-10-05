@@ -50,22 +50,15 @@ pub struct Echo {
 const TOP: &str = r#"
 library ieee;
 use ieee.std_logic_1164.all;
+use work.facet_hdl_axil_pkg.all;
 use work.echo_pkg.all;
 use work.echo_golden_pkg.all;
 
 entity echo_top is
-  generic (ADDR_WIDTH : positive := 8);
   port (
     clk, rst_n : in std_logic;
-    s_axi_awaddr : in std_logic_vector(ADDR_WIDTH - 1 downto 0);
-    s_axi_awvalid : in std_logic; s_axi_awready : out std_logic;
-    s_axi_wdata : in std_logic_vector(31 downto 0); s_axi_wstrb : in std_logic_vector(3 downto 0);
-    s_axi_wvalid : in std_logic; s_axi_wready : out std_logic;
-    s_axi_bresp : out std_logic_vector(1 downto 0); s_axi_bvalid : out std_logic; s_axi_bready : in std_logic;
-    s_axi_araddr : in std_logic_vector(ADDR_WIDTH - 1 downto 0);
-    s_axi_arvalid : in std_logic; s_axi_arready : out std_logic;
-    s_axi_rdata : out std_logic_vector(31 downto 0); s_axi_rresp : out std_logic_vector(1 downto 0);
-    s_axi_rvalid : out std_logic; s_axi_rready : in std_logic
+    axi_in : in axil_m2s_t;
+    axi_out : out axil_s2m_t
   );
 end entity;
 
@@ -76,14 +69,8 @@ begin
   m <= '1' when v = GOLDEN else '0';
 
   regs : entity work.echo_regs
-    generic map (ADDR_WIDTH => ADDR_WIDTH)
     port map (
-      clk => clk, rst_n => rst_n,
-      s_axi_awaddr => s_axi_awaddr, s_axi_awvalid => s_axi_awvalid, s_axi_awready => s_axi_awready,
-      s_axi_wdata => s_axi_wdata, s_axi_wstrb => s_axi_wstrb, s_axi_wvalid => s_axi_wvalid, s_axi_wready => s_axi_wready,
-      s_axi_bresp => s_axi_bresp, s_axi_bvalid => s_axi_bvalid, s_axi_bready => s_axi_bready,
-      s_axi_araddr => s_axi_araddr, s_axi_arvalid => s_axi_arvalid, s_axi_arready => s_axi_arready,
-      s_axi_rdata => s_axi_rdata, s_axi_rresp => s_axi_rresp, s_axi_rvalid => s_axi_rvalid, s_axi_rready => s_axi_rready,
+      clk => clk, rst_n => rst_n, axi_in => axi_in, axi_out => axi_out,
       input => v, input_written => open, output => v,
       golden => GOLDEN, matches_golden => m
     );
@@ -142,7 +129,7 @@ fn rust_and_vhdl_agree_on_every_bit() {
     let top = work.join("echo_top.vhd");
     std::fs::write(&top, TOP).unwrap();
     let generated = Vhdl::of::<Echo>().unwrap().write_to(&work.join("gen")).unwrap();
-    let sim = Sim::builder(&work, "echo_top", 8)
+    let sim = Sim::builder(&work, "echo_top")
         .sources(generated)
         .source(&golden_pkg)
         .source(&top)

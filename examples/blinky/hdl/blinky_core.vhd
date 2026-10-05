@@ -3,36 +3,19 @@
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
+use work.facet_hdl_axil_pkg.all;
 use work.blinky_pkg.all;
 
 entity blinky_core is
   generic (
-    ADDR_WIDTH : positive := 6;
-    CLK_HZ     : positive := 100_000_000
+    CLK_HZ : positive := 100_000_000
   );
   port (
-    clk   : in std_logic;
-    rst_n : in std_logic;
-
-    s_axi_awaddr  : in  std_logic_vector(ADDR_WIDTH - 1 downto 0);
-    s_axi_awvalid : in  std_logic;
-    s_axi_awready : out std_logic;
-    s_axi_wdata   : in  std_logic_vector(31 downto 0);
-    s_axi_wstrb   : in  std_logic_vector(3 downto 0);
-    s_axi_wvalid  : in  std_logic;
-    s_axi_wready  : out std_logic;
-    s_axi_bresp   : out std_logic_vector(1 downto 0);
-    s_axi_bvalid  : out std_logic;
-    s_axi_bready  : in  std_logic;
-    s_axi_araddr  : in  std_logic_vector(ADDR_WIDTH - 1 downto 0);
-    s_axi_arvalid : in  std_logic;
-    s_axi_arready : out std_logic;
-    s_axi_rdata   : out std_logic_vector(31 downto 0);
-    s_axi_rresp   : out std_logic_vector(1 downto 0);
-    s_axi_rvalid  : out std_logic;
-    s_axi_rready  : in  std_logic;
-
-    led : out std_logic_vector(7 downto 0)
+    clk     : in  std_logic;
+    rst_n   : in  std_logic;
+    axi_in  : in  axil_m2s_t;
+    axi_out : out axil_s2m_t;
+    led     : out std_logic_vector(7 downto 0)
   );
 end entity;
 
@@ -54,14 +37,8 @@ architecture rtl of blinky_core is
   signal calls   : unsigned(15 downto 0) := (others => '0');
 begin
   regs : entity work.blinky_regs
-    generic map (ADDR_WIDTH => ADDR_WIDTH)
     port map (
-      clk => clk, rst_n => rst_n,
-      s_axi_awaddr => s_axi_awaddr, s_axi_awvalid => s_axi_awvalid, s_axi_awready => s_axi_awready,
-      s_axi_wdata => s_axi_wdata, s_axi_wstrb => s_axi_wstrb, s_axi_wvalid => s_axi_wvalid, s_axi_wready => s_axi_wready,
-      s_axi_bresp => s_axi_bresp, s_axi_bvalid => s_axi_bvalid, s_axi_bready => s_axi_bready,
-      s_axi_araddr => s_axi_araddr, s_axi_arvalid => s_axi_arvalid, s_axi_arready => s_axi_arready,
-      s_axi_rdata => s_axi_rdata, s_axi_rresp => s_axi_rresp, s_axi_rvalid => s_axi_rvalid, s_axi_rready => s_axi_rready,
+      clk => clk, rst_n => rst_n, axi_in => axi_in, axi_out => axi_out,
       leds => leds,
       leds_written => open,
       status => (pattern => leds.pattern, leds => led_i, uptime_ms => uptime),

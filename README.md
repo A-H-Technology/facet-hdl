@@ -16,7 +16,11 @@ pub struct Blinky {
 
 - **VHDL** (`facet-hdl-vhdl`): a package with one VHDL type per Rust type
   (records, enums, arrays) plus `to_slv`/`to_<type>` packing functions, and an
-  AXI4-Lite register file entity whose ports are those typed records.
+  AXI4-Lite register file entity whose ports are those typed records. The bus
+  itself is two records from `facet_hdl_axil_pkg` (`axi_in : axil_m2s_t`,
+  `axi_out : axil_s2m_t`), so your logic carries it as two ports and passes it
+  straight through. Flat `s_axi_*` signals only appear at the Platform Designer
+  edge.
 - **Host handles** (`facet-hdl`): `bind::<Blinky>(transport)` returns that same
   struct with live handles: `b.leds.write(&ctl)?`, `b.status.read()?`. There's
   no `read` on a `ToFabric` and no `write` on a `FromFabric`.
