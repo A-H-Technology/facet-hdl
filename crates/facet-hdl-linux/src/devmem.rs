@@ -1,10 +1,7 @@
-//! [`Transport`] for an SoC FPGA whose fabric sits behind a memory-mapped
-//! bridge, reached through `/dev/mem`. Needs root (or CAP_SYS_RAWIO) and the
-//! bridge enabled before Linux boots; on mercury U-Boot does the latter.
-
+use crate::{Window, window_lock};
 use facet::Facet;
 use facet_hdl::{BindError, Boundary, Transport};
-use memmap2::{MmapOptions, MmapRaw};
+use memmap2::MmapOptions;
 use std::fs::OpenOptions;
 use std::io;
 use std::os::unix::fs::OpenOptionsExt;
@@ -15,11 +12,8 @@ use std::path::PathBuf;
 /// boundary component is an offset into this.
 pub const AGILEX5_LWH2F: u64 = 0x2000_0000;
 
-pub struct DevMem {
-    map: MmapRaw,
-    words: u32,
-    base: u64,
-}
+/// The bridge through `/dev/mem`. Needs root (or CAP_SYS_RAWIO).
+pub struct DevMem(Window);
 
 impl DevMem {
     /// Maps exactly the register window `B` declares, at physical `base`.
@@ -44,41 +38,21 @@ impl DevMem {
             .custom_flags(libc::O_SYNC)
             .open("/dev/mem")?;
         let map = MmapOptions::new().offset(base).len(words as usize * 4).map_raw(&file)?;
-        Ok(Self { map, words, base })
-    }
-
-    fn ptr(&self, word: u32) -> io::Result<*mut u32> {
-        if word >= self.words {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("word {word} is outside the {}-word window", self.words),
-            ));
-        }
-        Ok(self.map.as_mut_ptr().cast::<u32>().wrapping_add(word as usize))
+        Ok(Self(Window { map, words, phys: base }))
     }
 }
 
 impl Transport for DevMem {
-    /// Keyed on the physical base, so every process mapping this window
-    /// contends for one lock. /run/lock is root-only on NixOS, which is fine:
-    /// /dev/mem already needs root.
-    fn lock_path(&self) -> PathBuf {
-        PathBuf::from(format!("/run/lock/facet-hdl-devmem-{:#x}.lock", self.base))
-    }
-
     fn read(&mut self, word: u32) -> io::Result<u32> {
-        let p = self.ptr(word)?;
-        // SAFETY: in bounds of a live, 4-aligned mapping (page-aligned base,
-        // word index checked above). Volatile because each access is a bus
-        // transaction the fabric observes.
-        Ok(unsafe { p.read_volatile() })
+        self.0.read(word)
     }
 
     fn write(&mut self, word: u32, value: u32) -> io::Result<()> {
-        let p = self.ptr(word)?;
-        // SAFETY: as in `read`.
-        unsafe { p.write_volatile(value) };
-        Ok(())
+        self.0.write(word, value)
+    }
+
+    fn lock_path(&self) -> PathBuf {
+        window_lock(self.0.phys)
     }
 }
 

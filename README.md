@@ -47,7 +47,7 @@ HPS-to-FPGA bridge, but the pieces are separate crates:
 | `facet-hdl` | `ToFabric`/`FromFabric` registers, `ToFabricQueue`/`FromFabricQueue` channels, shape → `HwType`, bit codec, `Boundary` layout, `Transport`, `bind` |
 | `facet-hdl-vhdl` | VHDL-2008 package and AXI4-Lite register entity; `literal(&value)` renders a Rust value as a VHDL constant |
 | `facet-hdl-ghdl` | Co-simulation: GHDL runs the fabric, and a generated testbench turns stdin lines into AXI transactions. `SimTransport` makes the real host code drive it |
-| `facet-hdl-devmem` | `Transport` over an uncached `/dev/mem` mapping of the bridge (`AGILEX5_LWH2F = 0x2000_0000`) |
+| `facet-hdl-linux` | Linux transports: `DevMem` (uncached `/dev/mem` mapping of the bridge, `AGILEX5_LWH2F = 0x2000_0000`, polls) and `Uio` (a `generic-uio` node: the mapping plus the `irq` line, so `pop_wait` sleeps) |
 | `examples/blinky` | Declaration, hand-written fabric logic (`hdl/blinky_core.vhd`), the generator bin, the HPS CLI, and co-sim tests |
 
 ```sh
@@ -103,12 +103,25 @@ These are the rules `codec.rs` and the generated VHDL both implement.
 - Words from two accessors interleaving on one port would commit or return
   a value neither of them meant. So a binding owns its whole register window:
   `bind` takes an exclusive `flock` on the transport's lock file and holds it
-  until the binding is dropped. DevMem uses
-  `/run/lock/facet-hdl-devmem-<base>.lock`. A second `bind`, in the same
+  until the binding is dropped. DevMem and Uio both use
+  `/run/lock/facet-hdl-window-<phys>.lock`, so they exclude each other too. A second `bind`, in the same
   process or another one, gets `BindError::Busy`. The kernel releases the lock
   when the holder dies, `kill -9` included. Within one binding, a mutex keeps
   each port access contiguous. Raw `devmem` pokes bypass all of this; only a
   kernel driver owning the window could stop them.
+- The register file's `irq` output is **level**-sensitive: high while any
+  `FromFabricQueue` holds an entry. A consumer that finds its queue empty and
+  then waits can't miss an entry that landed in between, because the line is
+  already high when the wait starts. `FromFabricQueue::pop_wait(timeout)`
+  sleeps on it when the transport offers an `Interrupt` (`Uio`, and the GHDL
+  sim built with `.irq()`), and polls otherwise (`DevMem`).
+  - There is one line for the whole boundary. A waiter woken by another
+    queue's entry re-checks its own queue and sleeps again. While that other
+    entry sits unconsumed, though, the line stays high and the waiter
+    degrades to polling. Keep every `FromFabricQueue` drained.
+  - Nothing signals "a `ToFabricQueue` has room again". A level "not full"
+    line would be high nearly all the time, so a full push returns
+    `PushError::Full` and the producer retries.
 
 ## Verified
 
@@ -133,6 +146,16 @@ These are the rules `codec.rs` and the generated VHDL both implement.
   produces a real torn commit through an unowned second accessor.
 - Latency: a co-sim with a 200-cycle adder shows write-then-read returning a
   stale value, and `blinky::add` returning the right one.
+- Interrupt co-sim: the line is low while the results queue is empty, high
+  while a result waits, stays high until it's popped, then goes low again.
+  `pop_wait` wakes far inside its timeout and returns `None` once the timeout
+  passes. With `irq` planted stuck low, the line test fails and `pop_wait`
+  only wakes at its 30 s timeout.
+- `Uio`'s register path against a faked `/sys/class/uio` and a plain file in
+  place of `/dev/uioN`: lookup by name, the mapping, bounds, a node whose
+  `reg` is smaller than the boundary, and the shared lock path. **Not
+  verified:** `UioIrq` (unmask by writing 1, `poll`, read the count). That
+  needs a real `uio_pdrv_genirq` device.
 
 ## Not yet: running on mercury
 
@@ -146,13 +169,19 @@ network when this was written. Before it can do anything there:
    assignments for the LEDs.
 2. **Loading it.** QSPI currently holds the stock image. nixos-fpga's planned
    `hardware.fpga` (fpga-manager + overlay) is the declarative route.
-3. **Then:** `blinky --base 0x2000_0000+<component offset> status`. Don't
-   point it at an offset nothing decodes. A DECERR on arm64 can arrive as an
+3. **For `Uio` and its interrupt:** a device-tree node for the component with
+   `compatible = "generic-uio"`, `reg` covering the window, and the `irq`
+   wired to an FPGA-to-HPS interrupt as a level-high SPI. The kernel also
+   needs `uio_pdrv_genirq.of_id=generic-uio` on its command line. The module
+   is already `=m` in Terasic's kernel config. The SPI number depends on the
+   Platform Designer system, so none is assumed here. This belongs in
+   nixos-fpga's `hardware.fpga` overlay.
+4. **Then:** `blinky --uio <node name> status`, or `blinky --base
+   0x2000_0000+<component offset> status` without the node. Don't point
+   `--base` at an offset nothing decodes. A DECERR on arm64 can arrive as an
    SError and panic the kernel.
 
 Candidates for single-sourcing next: the Platform Designer `_hw.tcl` for the
-register entity (address span and interface come straight from `Boundary`),
-an interrupt line raised while a `FromFabricQueue` is non-empty. It should be
-level-sensitive, so no wakeup can be lost, and come with a UIO transport so
-the host can block instead of polling. Reset values could come from
+register entity, and that device-tree node. Address span, interface and
+interrupt come straight from `Boundary` for both. Reset values could come from
 `Default`.

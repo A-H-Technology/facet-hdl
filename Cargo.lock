@@ -20,8 +20,8 @@ version = "0.1.0"
 dependencies = [
  "facet",
  "facet-hdl",
- "facet-hdl-devmem",
  "facet-hdl-ghdl",
+ "facet-hdl-linux",
  "facet-hdl-vhdl",
 ]
 
@@ -70,22 +70,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "facet-hdl-devmem"
-version = "0.1.0"
-dependencies = [
- "facet",
- "facet-hdl",
- "libc",
- "memmap2",
-]
-
-[[package]]
 name = "facet-hdl-ghdl"
 version = "0.1.0"
 dependencies = [
  "facet",
  "facet-hdl",
  "facet-hdl-vhdl",
+]
+
+[[package]]
+name = "facet-hdl-linux"
+version = "0.1.0"
+dependencies = [
+ "facet",
+ "facet-hdl",
+ "libc",
+ "memmap2",
 ]
 
 [[package]]

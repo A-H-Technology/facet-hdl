@@ -1,17 +1,26 @@
 //! Host side of the demo, for the HPS. Same `Blinky` struct the VHDL was
 //! generated from; `bind` refuses to run against a bitstream that wasn't.
 //!
-//!   blinky [--base 0x20000000] status
+//!   blinky [--base 0x20000000 | --uio NAME] status
 //!   blinky [--base ..] leds <off|solid|blink|chase> [mask] [period_ms]
 //!   blinky [--base ..] add <a> <b> [--negate]
 
 use blinky::{Blinky, LedControl, Operands, Pattern};
-use facet_hdl::bind;
-use facet_hdl_devmem::{AGILEX5_LWH2F, DevMem};
+use facet_hdl::{Transport, bind};
+use facet_hdl_linux::{AGILEX5_LWH2F, DevMem, Uio};
 use std::process::ExitCode;
 use std::time::Duration;
 
-const USAGE: &str = "usage: blinky [--base ADDR] status | leds PATTERN [MASK] [PERIOD_MS] | add A B [--negate]";
+const USAGE: &str =
+    "usage: blinky [--base ADDR | --uio NAME] status | leds PATTERN [MASK] [PERIOD_MS] | add A B [--negate]";
+
+/// How to reach the register window.
+enum Window {
+    /// Physical address through /dev/mem.
+    Base(u64),
+    /// A generic-uio device-tree node, found by name.
+    Uio(String),
+}
 
 enum Cmd {
     Status,
@@ -20,7 +29,10 @@ enum Cmd {
 }
 
 fn main() -> ExitCode {
-    let result = parse(std::env::args().skip(1).collect()).and_then(|(base, cmd)| run(base, cmd));
+    let result = parse(std::env::args().skip(1).collect()).and_then(|(window, cmd)| match window {
+        Window::Base(base) => run(DevMem::open_for::<Blinky>(base)?, cmd),
+        Window::Uio(name) => run(Uio::open_for::<Blinky>(&name)?, cmd),
+    });
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -42,12 +54,20 @@ fn int(s: &str) -> Result<u64, Error> {
 // Fully parsed before anything is mapped: on arm64 a stray access into an
 // undecoded part of the bridge window can come back as an SError, which takes
 // the kernel down rather than this process.
-fn parse(mut args: Vec<String>) -> Result<(u64, Cmd), Error> {
-    let mut base = AGILEX5_LWH2F;
-    if args.first().is_some_and(|a| a == "--base") {
-        base = int(args.get(1).ok_or("--base needs an address")?)?;
-        args.drain(..2);
-    }
+fn parse(mut args: Vec<String>) -> Result<(Window, Cmd), Error> {
+    let window = match args.first().map(String::as_str) {
+        Some(flag @ ("--base" | "--uio")) => {
+            let value = args.get(1).ok_or(format!("{flag} needs a value"))?.clone();
+            let window = if flag == "--base" {
+                Window::Base(int(&value)?)
+            } else {
+                Window::Uio(value)
+            };
+            args.drain(..2);
+            window
+        }
+        _ => Window::Base(AGILEX5_LWH2F),
+    };
     let negate = args.iter().any(|a| a == "--negate");
     args.retain(|a| a != "--negate");
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -71,11 +91,11 @@ fn parse(mut args: Vec<String>) -> Result<(u64, Cmd), Error> {
         }),
         _ => return Err(USAGE.into()),
     };
-    Ok((base, cmd))
+    Ok((window, cmd))
 }
 
-fn run(base: u64, cmd: Cmd) -> Result<(), Error> {
-    let b: Blinky = bind(DevMem::open_for::<Blinky>(base)?)?;
+fn run(transport: impl Transport + 'static, cmd: Cmd) -> Result<(), Error> {
+    let b: Blinky = bind(transport)?;
     match cmd {
         Cmd::Status => println!("{:#?}", b.status.read()?),
         Cmd::Leds(ctl) => {
