@@ -290,5 +290,5 @@ interrupt come straight from `Boundary` for both. Reset values could come from
 
 ## Licence
 
-EUPL-1.2, see [LICENSE](LICENSE). Commits up to d10bcc4 were published under
-MIT OR Apache-2.0 and stay available under those terms.
+EUPL-1.2, see [LICENSE](LICENSE), from c1db5fe on. Earlier commits were
+published under MIT OR Apache-2.0 and stay available under those terms.
