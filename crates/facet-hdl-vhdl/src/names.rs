@@ -1,6 +1,6 @@
 //! Rust names -> VHDL identifiers, and the one namespace they all share.
 
-use facet_hdl::HwType;
+use facet_hdl::{HwType, TaggedOrigin};
 use std::collections::HashMap;
 
 /// `LedStatus` -> `led_status`.
@@ -26,7 +26,7 @@ pub fn type_mark(ty: &HwType) -> String {
         HwType::Int { bits, signed } => {
             format!("{}({} downto 0)", if *signed { "signed" } else { "unsigned" }, bits - 1)
         }
-        HwType::Enum { .. } | HwType::Struct { .. } | HwType::Array { .. } => {
+        HwType::Enum { .. } | HwType::Struct { .. } | HwType::Array { .. } | HwType::Tagged { .. } => {
             format!("{}_t", type_stem(ty))
         }
     }
@@ -39,7 +39,28 @@ pub fn type_stem(ty: &HwType) -> String {
         HwType::Int { bits, signed } => format!("{}{bits}", if *signed { 'i' } else { 'u' }),
         HwType::Enum { shape, .. } | HwType::Struct { shape, .. } => snake(shape.type_identifier),
         HwType::Array { elem, len } => format!("{}_array{len}", type_stem(elem)),
+        HwType::Tagged { origin, variants } => match origin {
+            TaggedOrigin::User(shape) => snake(shape.type_identifier),
+            // Named after the payloads, like arrays: `option_u8`, `result_bool_mode`.
+            TaggedOrigin::Option | TaggedOrigin::Result => {
+                let payload = |i: usize| variants[i].1.as_ref().map_or("unit".into(), type_stem);
+                match origin {
+                    TaggedOrigin::Option => format!("option_{}", payload(1)),
+                    _ => format!("result_{}_{}", payload(0), payload(1)),
+                }
+            }
+        },
     }
+}
+
+/// The enum type holding a [`HwType::Tagged`]'s variant tag.
+pub fn tag_mark(ty: &HwType) -> String {
+    format!("{}_tag_t", type_stem(ty))
+}
+
+/// Record field holding a tagged variant's payload.
+pub fn payload_field(variant: &str) -> String {
+    snake(variant)
 }
 
 pub fn enum_literal(ty: &HwType, variant: &str) -> String {

@@ -1,7 +1,7 @@
 //! A Rust value as a VHDL expression of its generated type, e.g. for reset
 //! values or test constants that must agree with the host.
 
-use crate::names::enum_literal;
+use crate::names::{enum_literal, payload_field};
 use facet::Facet;
 use facet_hdl::{HwType, LayoutError, codec};
 
@@ -34,7 +34,10 @@ fn render(ty: &HwType, words: &[u32], cursor: &mut u32) -> String {
                 if *signed { "signed" } else { "unsigned" }
             )
         }
-        HwType::Enum { variants, .. } => enum_literal(ty, variants[take(ty.width()) as usize]),
+        // Out-of-range codes fold onto the first variant, as `to_<type>` does.
+        HwType::Enum { variants, .. } => {
+            enum_literal(ty, variants.get(take(ty.width()) as usize).unwrap_or(&variants[0]))
+        }
         HwType::Struct { fields, .. } => {
             let parts: Vec<_> = fields
                 .iter()
@@ -46,6 +49,24 @@ fn render(ty: &HwType, words: &[u32], cursor: &mut u32) -> String {
             let parts: Vec<_> = (0..*len)
                 .map(|i| format!("{i} => {}", render(elem, words, cursor)))
                 .collect();
+            format!("({})", parts.join(", "))
+        }
+        // `to_<type>` decodes every payload field from the same bits, so a
+        // record that compares equal to it has to as well.
+        HwType::Tagged { variants, .. } => {
+            let tag = take(ty.tag_width()) as usize;
+            let start = *cursor;
+            let mut parts = vec![format!(
+                "tag => {}",
+                enum_literal(ty, variants.get(tag).unwrap_or(&variants[0]).0)
+            )];
+            for (v, p) in variants {
+                if let Some(p) = p {
+                    *cursor = start;
+                    parts.push(format!("{} => {}", payload_field(v), render(p, words, cursor)));
+                }
+            }
+            *cursor = start + ty.payload_width();
             format!("({})", parts.join(", "))
         }
     }

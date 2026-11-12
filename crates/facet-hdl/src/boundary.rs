@@ -188,27 +188,26 @@ fn collect<'a>(
     seen: &mut HashMap<ConstTypeId, ()>,
     names: &mut HashMap<&'static str, ConstTypeId>,
 ) -> Result<(), LayoutError> {
-    match ty {
-        HwType::Bool | HwType::Int { .. } => Ok(()),
-        HwType::Array { elem, .. } => collect(elem, out, seen, names),
-        HwType::Enum { shape, .. } | HwType::Struct { shape, .. } => {
-            if seen.insert(shape.id, ()).is_some() {
-                return Ok(());
-            }
-            if let Some(prev) = names.insert(shape.type_identifier, shape.id)
-                && prev != shape.id
-            {
-                return Err(LayoutError::NameClash(shape.type_identifier.to_owned()));
-            }
-            if let HwType::Struct { fields, .. } = ty {
-                for (_, f) in fields {
-                    collect(f, out, seen, names)?;
-                }
-            }
-            out.push(ty);
-            Ok(())
+    let Some(shape) = ty.named_shape() else {
+        // Anonymous (arrays, Option, Result): only what's inside has a name.
+        for c in ty.children() {
+            collect(c, out, seen, names)?;
         }
+        return Ok(());
+    };
+    if seen.insert(shape.id, ()).is_some() {
+        return Ok(());
     }
+    if let Some(prev) = names.insert(shape.type_identifier, shape.id)
+        && prev != shape.id
+    {
+        return Err(LayoutError::NameClash(shape.type_identifier.to_owned()));
+    }
+    for c in ty.children() {
+        collect(c, out, seen, names)?;
+    }
+    out.push(ty);
+    Ok(())
 }
 
 #[cfg(test)]

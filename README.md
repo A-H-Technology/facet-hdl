@@ -64,8 +64,21 @@ These are the rules `codec.rs` and the generated VHDL both implement.
   A fieldless enum is its declaration index in `ceil(log2(n))` bits. Structs
   are their fields in declaration order with the first field at the LSB.
   Arrays are their elements with index 0 at the LSB.
+- An enum whose variants carry data (`Option<T>`, `Result<T, E>`, or your own
+  `Cmd::Set(Config)`) is a tag, the variant's declaration index in
+  `ceil(log2(n))` bits, then a payload area as wide as the widest payload.
+  The payload starts at the area's LSB and the bits above it are zero; a
+  decoder ignores them. A `()` payload takes no bits, so `Result<(), E>` is
+  just the tag and `E`. A variant carries at most one field: wrap several in
+  a struct. `None` is variant 0 and `Some` 1; `Ok` is 0 and `Err` 1.
+  In VHDL it's a record: `tag` (an enumeration) plus one field per variant
+  that has a payload, named after the variant (`some`, `ok`, `err`, `set`).
+  Every payload field is decoded from the same bits, so only the one `tag`
+  names means anything. `Option`/`Result` are named after their payloads:
+  `option_u16_t`, `result_inner_bool_t`.
 - Rejected with an error that names the field path: `usize`, floats, `char`,
-  strings, slices, data-carrying enums, zero-sized things, recursive types.
+  strings, slices, variants with several fields, zero-sized things,
+  recursive types.
   Generated names that collide or are illegal in VHDL (`next`, `a__b`, a port
   `status` next to a type `Status`, ...) are rejected too.
 - Each register port occupies `ceil(width/32)` consecutive 32-bit words, in
@@ -131,7 +144,9 @@ These are the rules `codec.rs` and the generated VHDL both implement.
   checks bind/fingerprint, 3-word signed sums, LED patterns and snapshotted
   64-bit uptime.
 - Echo co-sim covers nested structs, arrays of structs/enums/bools, 2-D
-  arrays, `u128` and `i8`/`i64`. A golden constant rendered from Rust checks
+  arrays, `u128`, `i8`/`i64`, and tagged types: `Option<u16>`,
+  `Result<(), Tri>`, an array of a user enum with payloads of three widths,
+  and `Option<Result<Inner, bool>>`. A golden constant rendered from Rust checks
   VHDL pack and unpack *separately*, so a symmetric bug can't hide behind the
   loopback. A planted field-order bug does fail it.
 - Queue co-sim: a fabric pipeline (`jobs` → ×3 → `done`) runs 300 sequenced

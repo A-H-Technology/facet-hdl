@@ -30,7 +30,7 @@ mod hw;
 mod port;
 
 pub use boundary::{Boundary, Direction, FINGERPRINT_WORD, PortDecl, PortKind, queue};
-pub use hw::{HwType, LayoutError};
+pub use hw::{HwType, LayoutError, TaggedOrigin};
 pub use port::{
     BindError, FromFabric, FromFabricQueue, Interrupt, PortError, PushError, ToFabric, ToFabricQueue, Transport, bind,
 };

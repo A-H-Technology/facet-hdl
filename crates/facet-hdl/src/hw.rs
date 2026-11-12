@@ -1,13 +1,22 @@
 //! The hardware view of a Rust type: what a [`Shape`] means as a bit vector.
 
-use facet::{ConstTypeId, Facet, NumericType, PrimitiveType, SequenceType, Shape, Type, UserType};
+use facet::{ConstTypeId, Def, Facet, NumericType, PrimitiveType, SequenceType, Shape, Type, UserType};
 use std::fmt;
+
+/// Where a [`HwType::Tagged`] came from. `Option` and `Result` have no name of
+/// their own, so generated code names them after their payloads instead.
+#[derive(Debug, Clone, Copy)]
+pub enum TaggedOrigin {
+    User(&'static Shape),
+    Option,
+    Result,
+}
 
 /// A type that has a fixed bit-level representation on the fabric.
 ///
 /// Only types where every bit pattern of the encoding is either a valid value
-/// or a detectable error can appear here, which is why `char`, floats, slices
-/// and data-carrying enums are rejected rather than approximated.
+/// or a detectable error can appear here, which is why `char`, floats and
+/// slices are rejected rather than approximated.
 #[derive(Debug, Clone)]
 pub enum HwType {
     Bool,
@@ -30,6 +39,15 @@ pub enum HwType {
         elem: Box<HwType>,
         len: usize,
     },
+    /// Enum whose variants may carry one value each: `Option`, `Result`, or a
+    /// user enum like `Cmd::Set(Config)`. The variant's declaration index sits
+    /// at the LSB, then a payload area as wide as the widest payload. A
+    /// payload starts at the area's LSB and the bits above it are zero.
+    Tagged {
+        origin: TaggedOrigin,
+        /// `None` for a variant without a payload (or whose payload is `()`).
+        variants: Vec<(&'static str, Option<HwType>)>,
+    },
 }
 
 impl HwType {
@@ -49,6 +67,28 @@ impl HwType {
             ty: shape.to_string(),
             why: why.to_owned(),
         };
+        // Option is also an enum by `ty`, so the defs have to be looked at first.
+        match shape.def {
+            Def::Option(def) => {
+                let some = Self::payload(def.t, "Some", path, open)?;
+                return Ok(Self::Tagged {
+                    origin: TaggedOrigin::Option,
+                    variants: vec![("None", None), ("Some", some)],
+                });
+            }
+            Def::Result(def) => {
+                let ok = Self::payload(def.t, "Ok", path, open)?;
+                let err = Self::payload(def.e, "Err", path, open)?;
+                if ok.is_none() && err.is_none() {
+                    return Err(unsupported(path, "Result<(), ()> carries no data; use bool"));
+                }
+                return Ok(Self::Tagged {
+                    origin: TaggedOrigin::Result,
+                    variants: vec![("Ok", ok), ("Err", err)],
+                });
+            }
+            _ => {}
+        }
         match shape.ty {
             Type::Primitive(PrimitiveType::Boolean) => Ok(Self::Bool),
             Type::Primitive(PrimitiveType::Numeric(NumericType::Integer { signed })) => {
@@ -81,18 +121,41 @@ impl HwType {
                 })
             }
             Type::User(UserType::Enum(en)) => {
-                if let Some(v) = en.variants.iter().find(|v| !v.data.fields.is_empty()) {
-                    return Err(unsupported(
-                        path,
-                        &format!("variant `{}` carries data; only fieldless enums are supported", v.name),
-                    ));
-                }
                 if en.variants.len() < 2 {
                     return Err(unsupported(path, "an enum needs at least two variants to occupy a bit"));
                 }
-                Ok(Self::Enum {
-                    shape,
-                    variants: en.variants.iter().map(|v| v.name).collect(),
+                if en.variants.iter().all(|v| v.data.fields.is_empty()) {
+                    return Ok(Self::Enum {
+                        shape,
+                        variants: en.variants.iter().map(|v| v.name).collect(),
+                    });
+                }
+                if open.contains(&shape.id) {
+                    return Err(unsupported(path, "a type that contains itself has no finite width"));
+                }
+                open.push(shape.id);
+                let mut variants = Vec::with_capacity(en.variants.len());
+                for v in en.variants {
+                    let payload = match v.data.fields {
+                        [] => None,
+                        [f] => Self::payload(f.shape(), v.name, path, open)?,
+                        _ => {
+                            return Err(unsupported(
+                                path,
+                                &format!(
+                                    "variant `{}` carries {} fields; wrap them in one struct",
+                                    v.name,
+                                    v.data.fields.len()
+                                ),
+                            ));
+                        }
+                    };
+                    variants.push((v.name, payload));
+                }
+                open.pop();
+                Ok(Self::Tagged {
+                    origin: TaggedOrigin::User(shape),
+                    variants,
                 })
             }
             Type::User(UserType::Struct(st)) => {
@@ -116,6 +179,22 @@ impl HwType {
         }
     }
 
+    /// A variant's payload; `()` counts as none, so `Result<(), E>` works.
+    fn payload(
+        shape: &'static Shape,
+        variant: &str,
+        path: &mut Vec<String>,
+        open: &mut Vec<ConstTypeId>,
+    ) -> Result<Option<Self>, LayoutError> {
+        if shape.id == <()>::SHAPE.id {
+            return Ok(None);
+        }
+        path.push(variant.to_owned());
+        let ty = Self::resolve(shape, path, open)?;
+        path.pop();
+        Ok(Some(ty))
+    }
+
     pub fn width(&self) -> u32 {
         match self {
             Self::Bool => 1,
@@ -123,14 +202,63 @@ impl HwType {
             Self::Enum { variants, .. } => enum_width(variants.len()),
             Self::Struct { fields, .. } => fields.iter().map(|(_, t)| t.width()).sum(),
             Self::Array { elem, len } => elem.width() * *len as u32,
+            Self::Tagged { .. } => self.tag_width() + self.payload_width(),
+        }
+    }
+
+    /// Width of a [`HwType::Tagged`]'s tag; 0 for anything else.
+    pub fn tag_width(&self) -> u32 {
+        match self {
+            Self::Tagged { variants, .. } => enum_width(variants.len()),
+            _ => 0,
+        }
+    }
+
+    /// Width of a [`HwType::Tagged`]'s payload area; 0 for anything else.
+    pub fn payload_width(&self) -> u32 {
+        match self {
+            Self::Tagged { variants, .. } => variants
+                .iter()
+                .filter_map(|(_, p)| p.as_ref().map(Self::width))
+                .max()
+                .unwrap_or(0),
+            _ => 0,
         }
     }
 
     /// The name this type goes by in generated code, if it is a named type.
     pub fn name(&self) -> Option<&'static str> {
         match self {
-            Self::Enum { shape, .. } | Self::Struct { shape, .. } => Some(shape.type_identifier),
+            Self::Enum { shape, .. }
+            | Self::Struct { shape, .. }
+            | Self::Tagged {
+                origin: TaggedOrigin::User(shape),
+                ..
+            } => Some(shape.type_identifier),
             _ => None,
+        }
+    }
+
+    /// The shape behind a named type, for deduplication by type id.
+    pub fn named_shape(&self) -> Option<&'static Shape> {
+        match self {
+            Self::Enum { shape, .. }
+            | Self::Struct { shape, .. }
+            | Self::Tagged {
+                origin: TaggedOrigin::User(shape),
+                ..
+            } => Some(shape),
+            _ => None,
+        }
+    }
+
+    /// Types directly inside this one.
+    pub fn children(&self) -> Vec<&HwType> {
+        match self {
+            Self::Bool | Self::Int { .. } | Self::Enum { .. } => Vec::new(),
+            Self::Struct { fields, .. } => fields.iter().map(|(_, t)| t).collect(),
+            Self::Array { elem, .. } => vec![elem],
+            Self::Tagged { variants, .. } => variants.iter().filter_map(|(_, p)| p.as_ref()).collect(),
         }
     }
 }
@@ -158,6 +286,24 @@ impl fmt::Display for HwType {
                 write!(f, "}}")
             }
             Self::Array { elem, len } => write!(f, "[{elem};{len}]"),
+            Self::Tagged { origin, variants } => {
+                match origin {
+                    TaggedOrigin::User(shape) => write!(f, "{}", shape.type_identifier)?,
+                    TaggedOrigin::Option => write!(f, "Option")?,
+                    TaggedOrigin::Result => write!(f, "Result")?,
+                }
+                write!(f, "{{")?;
+                for (i, (name, payload)) in variants.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ",")?;
+                    }
+                    write!(f, "{name}")?;
+                    if let Some(p) = payload {
+                        write!(f, "({p})")?;
+                    }
+                }
+                write!(f, "}}")
+            }
         }
     }
 }

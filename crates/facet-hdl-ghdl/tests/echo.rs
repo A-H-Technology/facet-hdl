@@ -24,6 +24,17 @@ pub struct Inner {
     pub small: i8,
 }
 
+/// Payloads of different widths share one area; `Go`'s is narrower than
+/// `Set`'s, so the padding above it is exercised too.
+#[derive(Facet, Debug, Clone, PartialEq)]
+#[repr(u8)]
+pub enum Cmd {
+    Stop,
+    Set(Inner),
+    Nudge(i8),
+    Go(Tri),
+}
+
 #[derive(Facet, Debug, Clone, PartialEq)]
 pub struct Everything {
     pub inner: Inner,
@@ -34,6 +45,10 @@ pub struct Everything {
     pub wide: u128,
     pub neg: i64,
     pub half: u16,
+    pub maybe: Option<u16>,
+    pub res: Result<(), Tri>,
+    pub cmds: [Cmd; 3],
+    pub nested: Option<Result<Inner, bool>>,
 }
 
 #[derive(Facet)]
@@ -96,6 +111,21 @@ impl Rng {
             small: self.next() as i8,
         }
     }
+    fn cmd(&mut self) -> Cmd {
+        match self.next() % 4 {
+            0 => Cmd::Stop,
+            1 => Cmd::Set(self.inner()),
+            2 => Cmd::Nudge(self.next() as i8),
+            _ => Cmd::Go(self.tri()),
+        }
+    }
+    fn nested(&mut self) -> Option<Result<Inner, bool>> {
+        match self.next() % 3 {
+            0 => None,
+            1 => Some(Ok(self.inner())),
+            _ => Some(Err(self.next() & 1 == 1)),
+        }
+    }
     fn everything(&mut self) -> Everything {
         Everything {
             inner: self.inner(),
@@ -106,6 +136,10 @@ impl Rng {
             wide: (self.next() as u128) << 64 | self.next() as u128,
             neg: self.next() as i64,
             half: self.next() as u16,
+            maybe: (self.next() & 1 == 1).then(|| self.next() as u16),
+            res: if self.next() & 1 == 1 { Ok(()) } else { Err(self.tri()) },
+            cmds: std::array::from_fn(|_| self.cmd()),
+            nested: self.nested(),
         }
     }
 }

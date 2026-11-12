@@ -1,8 +1,29 @@
 //! `<boundary>_pkg`: one VHDL type per Rust type plus the packing functions
 //! that mirror `facet_hdl::codec` bit for bit.
 
-use crate::names::{NameError, Namespace, enum_literal, type_mark, type_stem};
+use crate::names::{NameError, Namespace, enum_literal, payload_field, tag_mark, type_mark, type_stem};
 use facet_hdl::{Boundary, HwType};
+
+/// Type declaration and the two conversion bodies for a VHDL enumeration;
+/// the caller declares the functions' headers.
+fn enumeration(head: &mut String, body: &mut String, mark: &str, width: &str, lits: &[String]) {
+    writeln!(head, "  type {mark} is ({});", lits.join(", ")).unwrap();
+    writeln!(
+        body,
+        "  function to_slv(v : {mark}) return std_logic_vector is\n  begin\n    return std_logic_vector(to_unsigned({mark}'pos(v), {width}));\n  end function;\n"
+    )
+    .unwrap();
+    let mut arms = String::new();
+    for (i, l) in lits.iter().enumerate() {
+        writeln!(arms, "      when {i} => return {l};").unwrap();
+    }
+    writeln!(
+        body,
+        "  -- Out-of-range codes can't come from the host (the Rust side only\n  -- encodes real variants); fold them onto the first variant.\n  function to_{mark}(s : std_logic_vector) return {mark} is\n    alias n : std_logic_vector(s'length - 1 downto 0) is s;\n  begin\n    case to_integer(unsigned(n)) is\n{arms}      when others => return {};\n    end case;\n  end function;\n",
+        lits[0]
+    )
+    .unwrap();
+}
 use std::fmt::Write;
 
 /// Statement storing the slv form of `value` into `target(hi downto lo)`.
@@ -33,12 +54,10 @@ pub fn unpack(src: &str, lo: &str, hi: &str, ty: &HwType) -> String {
 /// [`Boundary::named_types`], so equal names mean equal types).
 fn declarations(b: &Boundary) -> Vec<&HwType> {
     fn walk<'a>(ty: &'a HwType, out: &mut Vec<&'a HwType>) {
-        match ty {
-            HwType::Bool | HwType::Int { .. } => return,
-            HwType::Array { elem, .. } => walk(elem, out),
-            HwType::Struct { fields, .. } => fields.iter().for_each(|(_, f)| walk(f, out)),
-            HwType::Enum { .. } => {}
+        if matches!(ty, HwType::Bool | HwType::Int { .. }) {
+            return;
         }
+        ty.children().into_iter().for_each(|c| walk(c, out));
         if !out.iter().any(|t| type_mark(t) == type_mark(ty)) {
             out.push(ty);
         }
@@ -83,20 +102,54 @@ pub fn generate(b: &Boundary, ns: &mut Namespace) -> Result<String, NameError> {
                 for (v, l) in variants.iter().zip(&lits) {
                     ns.claim(l, format!("variant `{v}` of {origin}"))?;
                 }
-                writeln!(head, "  type {mark} is ({});", lits.join(", ")).unwrap();
+                enumeration(&mut head, &mut body, &mark, &width, &lits);
+            }
+            HwType::Tagged { variants, .. } => {
+                let tag = tag_mark(ty);
+                let tag_width = format!("{st}_tag_width");
+                let tw = ty.tag_width();
+                ns.claim(&tag, format!("the tag of {origin}"))?;
+                ns.claim(&tag_width, format!("the tag width of {origin}"))?;
+                ns.claim(&format!("to_{tag}"), format!("the tag decoder of {origin}"))?;
+                let lits: Vec<_> = variants.iter().map(|(v, _)| enum_literal(ty, v)).collect();
+                for ((v, _), l) in variants.iter().zip(&lits) {
+                    ns.claim(l, format!("variant `{v}` of {origin}"))?;
+                }
+                writeln!(head, "  constant {tag_width} : natural := {tw};").unwrap();
+                enumeration(&mut head, &mut body, &tag, &tag_width, &lits);
+                writeln!(head, "  function to_slv(v : {tag}) return std_logic_vector;").unwrap();
+                writeln!(head, "  function to_{tag}(s : std_logic_vector) return {tag};\n").unwrap();
+
+                // A record, not a union: VHDL has none. Every payload field is
+                // decoded from the same bits, and only the one `tag` names is
+                // meaningful, like reading the wrong arm of a C union.
+                let mut record_scope = Namespace::default();
+                record_scope.claim("tag", format!("the tag field of {origin}"))?;
+                writeln!(head, "  type {mark} is record\n    tag : {tag};").unwrap();
+                let (mut arms, mut unpacks) = (String::new(), String::new());
+                for ((v, payload), lit) in variants.iter().zip(&lits) {
+                    let Some(p) = payload else { continue };
+                    let field = payload_field(v);
+                    record_scope.claim(&field, format!("the payload of variant `{v}` of {origin}"))?;
+                    writeln!(head, "    {field} : {};", type_mark(p)).unwrap();
+                    let (l, h) = (tw.to_string(), (tw + p.width() - 1).to_string());
+                    writeln!(
+                        arms,
+                        "      when {lit} =>\n        {}",
+                        pack("r", &l, &h, &format!("v.{field}"), p)
+                    )
+                    .unwrap();
+                    writeln!(unpacks, "    v.{field} := {};", unpack("n", &l, &h, p)).unwrap();
+                }
+                writeln!(head, "  end record;").unwrap();
                 writeln!(
                     body,
-                    "  function to_slv(v : {mark}) return std_logic_vector is\n  begin\n    return std_logic_vector(to_unsigned({mark}'pos(v), {width}));\n  end function;\n"
+                    "  function to_slv(v : {mark}) return std_logic_vector is\n    variable r : std_logic_vector({width} - 1 downto 0) := (others => '0');\n  begin\n    r({tag_width} - 1 downto 0) := to_slv(v.tag);\n    case v.tag is\n{arms}      when others => null;\n    end case;\n    return r;\n  end function;\n"
                 )
                 .unwrap();
-                let mut arms = String::new();
-                for (i, l) in lits.iter().enumerate() {
-                    writeln!(arms, "      when {i} => return {l};").unwrap();
-                }
                 writeln!(
                     body,
-                    "  -- Out-of-range codes can't come from the host (the Rust side only\n  -- encodes real variants); fold them onto the first variant.\n  function to_{mark}(s : std_logic_vector) return {mark} is\n    alias n : std_logic_vector(s'length - 1 downto 0) is s;\n  begin\n    case to_integer(unsigned(n)) is\n{arms}      when others => return {};\n    end case;\n  end function;\n",
-                    lits[0]
+                    "  function to_{mark}(s : std_logic_vector) return {mark} is\n    alias n : std_logic_vector(s'length - 1 downto 0) is s;\n    variable v : {mark};\n  begin\n    v.tag := to_{tag}(n({tag_width} - 1 downto 0));\n{unpacks}    return v;\n  end function;\n"
                 )
                 .unwrap();
             }
