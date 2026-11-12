@@ -47,10 +47,15 @@ pub entity hello_fabric(clk: clock, rst: bool, axi: facet_hdl::AxiIn, button: bo
 And the HPS side (`src/bin/hello.rs`) is:
 
 ```rust
-let mut fabric: Hello = bind(transport)?;
-println!("add_one(41) = {}", fabric.add_one(41, Duration::from_millis(100))?);
-fabric.serve()?; // prints "hello from the fabric!" on every press
+let fabric: Hello = bind(transport)?;
+println!("add_one(41) = {}", block_on(fabric.add_one(41))?);
+block_on(fabric.serve())?; // prints "hello from the fabric!" on every press
 ```
+
+Imports are `async`: a call into the fabric finishes whenever the fabric
+answers, so it's a future, and `serve` is one too. They run on any executor
+(tokio, smol, or the bundled `block_on` above), and on `&self`, so a host can
+serve the fabric's calls and make its own on the same boundary at once.
 
 Calls are built on ports, which you can also declare directly:
 
@@ -71,7 +76,8 @@ pub struct Pipe {
 Two kinds of port, each in both directions. `ToFabric`/`FromFabric` are
 registers: one value, last writer wins. `ToFabricQueue`/`FromFabricQueue` are
 SPSC channels: a ring of `N` entries that never drops or repeats one. The host
-gets `push(&T) -> Result<(), PushError>` / `pop() -> Option<T>` on `&mut self`,
+gets `push(&T) -> Result<(), PushError>` / `pop() -> Option<T>`, or
+`send(&T).await` / `recv().await` to wait for room or for an entry,
 and the fabric gets the end of a queue shaped like Spade's own
 `std::mem::FifoRead`/`FifoWrite`: `facet_hdl::Read<T> { read: Option<T>,
 ack: inv bool }` for a host -> fabric queue, `facet_hdl::Write<T> { write:
@@ -139,9 +145,9 @@ pub mod calc {
     pub fn flush();
 }
 
-let mut calc: calc::Calc = bind(transport)?;
-let y = calc.scale(7, Duration::from_millis(10))?;   // Rust -> fabric
-calc.serve()?;                                       // fabric -> Rust, forever (or poll())
+let calc: calc::Calc = bind(transport)?;
+let y = calc.scale(7).await?;   // Rust -> fabric
+calc.serve().await?;            // fabric -> Rust, forever (or poll())
 ```
 
 The macro adds an argument struct per fn (`AddArgs { a, b }`) and a boundary
@@ -154,31 +160,35 @@ named after the module (`Calc`) with two queues per fn, `<fn>_req` and
   matches on it like Rust would. The fns stay as written, so Rust can still
   call them.
 - **Import** `scale`: the declaration becomes a method,
-  `calc.scale(x, timeout) -> Result<u32, PortError>`. The fabric pops a
+  `async fn scale(&self, x) -> Result<u32, PortError>`. The fabric pops a
   `ScaleArgs` from `scale_req` and pushes a plain `uint<32>` onto
   `scale_resp`, since HDL can't panic.
 - `oneway` drops `_resp`. An exported oneway fn's panic is only reported by
-  the panic hook; an imported one's method returns once the call is queued.
+  the panic hook; an imported one's future resolves once the call is queued.
 - A fn with no arguments, or an answer of `()`, is a queue of `()`: the
   fabric reads or writes `Some(())`, and no data is stored. The handshake is
   the message.
 
-The rings are FIFO, so answers come back in call order, and up to `depth`
-calls can be in flight. The queues are public fields, so you can also
-pipeline by hand (`calc.scale_req.push(..)`, then `calc.scale_resp.pop()`).
+Calls to one import can overlap (`join_all` over eight `scale`s puts eight
+in flight); past `depth` they wait for room. The ring is FIFO, so answer
+`k` belongs to request `k`, and an import's `_resp` is an `rpc::Answers`
+rather than a `FromFabricQueue`: each call claims its answer by that number,
+and whoever pops another call's answer first parks it for them.
 
-An import that times out may still be answered later. The next call to that
-fn first drains the answers still owed, worked out from the queues' own
-counts as calls sent minus answers taken, so a late answer is never
-returned as the wrong call's.
+There's no timeout parameter: put your runtime's timeout around the call
+(or use `block_on_timeout`). Dropping the future abandons the call. The
+request may already be with the fabric, and its answer still comes, but it
+gets dropped on arrival instead of being handed to a later call. Answers
+owed to a previous process are dropped the same way.
 
-`serve` sleeps on the irq line between calls. If the fabric stops draining an
-export's `_resp`, `serve` waits on it (there's no "room" interrupt) and stops
-answering other fns until it drains. The boundary is one `&mut` value, so
-serving exports and calling imports happen from the same thread, in turn.
+One thread per binding waits on the irq line and wakes whichever futures
+are waiting, so nothing needs a reactor. It only touches the line while
+someone is waiting. If the fabric stops draining an export's `_resp`,
+`serve` blocks on it (there's no "room" interrupt) and stops answering other
+fns until it drains.
 
-Limits for now: no generics, no `self`, parameters are `name: Type`, and an
-import can't have a parameter called `timeout` (the method adds one).
+Limits for now: no generics, no `self`, parameters are `name: Type`, and
+exports are sync fns.
 
 ## Wire format
 
@@ -254,16 +264,17 @@ Spade lays its own types out.
 - The register file's `irq` output is **level**-sensitive: high while any
   `FromFabricQueue` holds an entry. A consumer that finds its queue empty and
   then waits can't miss an entry that landed in between, because the line is
-  already high when the wait starts. `FromFabricQueue::pop_wait(timeout)`
-  sleeps on it when the transport offers an `Interrupt` (`Uio`, and the
-  iverilog sim built with `.irq()`), and polls otherwise (`DevMem`).
+  already high when the wait starts. `FromFabricQueue::recv()` (and its
+  sync twin `pop_wait(timeout)`) sleeps on it when the transport offers an
+  `Interrupt` (`Uio`, and the iverilog sim built with `.irq()`), and polls
+  every 50 µs otherwise (`DevMem`).
   - There is one line for the whole boundary. A waiter woken by another
     queue's entry re-checks its own queue and sleeps again. While that other
     entry sits unconsumed, though, the line stays high and the waiter
     degrades to polling. Keep every `FromFabricQueue` drained.
   - Nothing signals "a `ToFabricQueue` has room again". A level "not full"
     line would be high nearly all the time, so a full push returns
-    `PushError::Full` and the producer retries.
+    `PushError::Full`, and `send` re-polls every 50 µs until there's room.
 - Every AXI access answers OKAY: unmapped words read 0 and ignore writes,
   since an error response can take the kernel down. Each beat is one 32-bit
   word; AxSIZE and WSTRB are ignored, and every burst counts up.
@@ -321,12 +332,19 @@ watching it fail.
   Rust's `add` makes it report 56 mismatches, the 56 calls that don't
   overflow. Its counters have no reset on purpose: with the register file's
   queues ready during reset, calls get lost and the test fails.
-- Import co-sim: Rust calls the Spade fabric's `scale` (also 8 in flight
-  through the raw queues), `ping` (no arguments, `()` answer), oneway
-  `set_led` read back through `led`, and answers the fabric's three calls to
-  the no-argument export `tick`. `slow` answers 2000 cycles late: `slow(1)`
-  times out, and `slow(2)` must still return 3. With the drain of owed
-  answers removed from `rpc::invoke`, it returns 2, `slow(1)`'s answer.
+- Import co-sim, on tokio: Rust calls the Spade fabric's `scale` (also 8
+  calls in flight at once), `ping` (no arguments, `()` answer), oneway
+  `set_led` read back through `led`, while `serve` answers the fabric's three
+  calls to the no-argument export `tick` alongside. `slow` answers 2000
+  cycles late, one at a time:
+  - `slow(30)` and `slow(40)` both go out, then `slow(40)` is awaited first
+    and has to park `slow(30)`'s answer on the way. If other calls' answers
+    are dropped, `slow(30)` never returns. If answers are handed out in pop
+    order, `slow(40)` gets 31.
+  - `slow(1)` is given up on after its request went out, and `slow(2)` must
+    still return 3. The same holds across a rebind, for an answer owed to
+    the dropped binding.
+  - With pop-order hand-out planted, that returns `slow(1)`'s 2.
 - `Uio`'s register path against a faked `/sys/class/uio` and a plain file in
   place of `/dev/uioN`: lookup by name, the mapping, bounds, a node whose
   `reg` is smaller than the boundary, and the shared lock path. **Not

@@ -24,13 +24,17 @@
 //! That one struct is both what the Spade generator reads and, after
 //! [`bind`], the host's handle to the running fabric.
 
+mod bell;
 mod boundary;
 pub mod codec;
+mod exec;
 mod hw;
 mod port;
 pub mod rpc;
 
 pub use facet_hdl_macros::rpc;
+
+pub use exec::{block_on, block_on_timeout};
 
 pub use boundary::{Boundary, Direction, FINGERPRINT_WORD, PortDecl, PortKind, queue};
 pub use hw::{HwType, LayoutError, TaggedOrigin};

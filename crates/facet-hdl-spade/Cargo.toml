@@ -17,3 +17,7 @@ spade-codespan-reporting = "0.12"
 
 [dev-dependencies]
 facet-hdl-iverilog = { path = "../facet-hdl-iverilog" }
+# The rpc tests run the async API on a real runtime, which is how a host
+# program would.
+tokio = { version = "1", features = ["rt", "macros", "time"] }
+futures = "0.3"

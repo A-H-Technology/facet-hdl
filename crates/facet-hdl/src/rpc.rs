@@ -3,14 +3,15 @@
 //! A call is a pair of queues, `<fn>_req` and `<fn>_resp`, pointing whichever
 //! way the call goes. For an `#[export]` the fabric pushes arguments and pops
 //! a [`CallResult`]; for an `#[import]` the host pushes arguments and pops
-//! the fabric's answer as-is (the fabric can't panic). Rings are FIFO, so
-//! several calls can be in flight and answers come back in order. A
-//! `oneway` fn has no `_resp`.
+//! the fabric's answer as-is (the fabric can't panic), claimed by request
+//! number so calls can overlap (see [`Answers`]). A `oneway` fn has no
+//! `_resp`.
 
-use crate::port::{FromFabricQueue, PortError, PushError, ToFabricQueue};
+pub use crate::port::Answers;
+use crate::port::{FromFabricQueue, Port, PortError, PushError, ToFabricQueue};
 use facet::Facet;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// What the fabric gets back from a call. It's always told, so a `()` fn
 /// still answers: the fabric can sequence on "it finished" and see a panic.
@@ -32,8 +33,10 @@ pub fn call<T>(f: impl FnOnce() -> T) -> CallResult<T> {
 }
 
 /// Pushes a response, waiting while the fabric hasn't drained earlier ones.
-/// There's no interrupt for "room again" (see the README), so this polls.
-pub fn respond<T: Facet<'static>, const N: usize>(q: &mut ToFabricQueue<T, N>, v: &T) -> Result<(), PortError> {
+/// There's no interrupt for "room again" (see the README), so this polls. It
+/// blocks rather than awaits because it runs inside the sync `poll`; a fabric
+/// that doesn't drain its answers stalls the host either way.
+pub fn respond<T: Facet<'static>, const N: usize>(q: &ToFabricQueue<T, N>, v: &T) -> Result<(), PortError> {
     loop {
         match q.push(v) {
             Ok(()) => return Ok(()),
@@ -43,60 +46,76 @@ pub fn respond<T: Facet<'static>, const N: usize>(q: &mut ToFabricQueue<T, N>, v
     }
 }
 
-/// Sleeps until any request queue in the boundary might hold a call, or
-/// `timeout`. The generated `serve` loop's idle wait.
-pub fn wait<T: Facet<'static>, const N: usize>(q: &FromFabricQueue<T, N>, timeout: Duration) -> Result<(), PortError> {
-    q.wait_irq(timeout)
+/// The generated `serve` loop's idle wait. Started *before* polling the
+/// request queues, so a call that lands in between still wakes it.
+pub struct Idle<'a> {
+    port: &'a Port,
+    seen: u64,
 }
 
-/// Pushes, waiting for room until `deadline`.
-fn send_by<A: Facet<'static>, const N: usize>(
-    q: &mut ToFabricQueue<A, N>,
-    v: &A,
-    deadline: Instant,
-    timeout: Duration,
-) -> Result<(), PortError> {
-    loop {
-        match q.push(v) {
-            Ok(()) => return Ok(()),
-            Err(PushError::Full) if Instant::now() < deadline => std::thread::sleep(Duration::from_micros(50)),
-            Err(PushError::Full) => return Err(PortError::Timeout(timeout)),
-            Err(PushError::Port(e)) => return Err(e),
-        }
+impl<'a> Idle<'a> {
+    /// `q` is any request queue of the boundary: they share one line.
+    pub fn start<T: Facet<'static>, const N: usize>(q: &'a FromFabricQueue<T, N>) -> Self {
+        let (port, seen) = q.idle();
+        Self { port, seen }
+    }
+
+    /// Resolves once any request queue might hold a call.
+    pub async fn wait(self) -> Result<(), PortError> {
+        self.port.changed(self.seen, false).await
     }
 }
 
-/// A oneway `#[import]`: hand the fabric its arguments, waiting up to
-/// `timeout` for room.
-pub fn send<A: Facet<'static>, const N: usize>(
-    q: &mut ToFabricQueue<A, N>,
-    args: &A,
-    timeout: Duration,
-) -> Result<(), PortError> {
-    send_by(q, args, Instant::now() + timeout, timeout)
-}
-
-/// An `#[import]` round trip: push the arguments, wait for the answer.
+/// An `#[import]` round trip: push the arguments, await the answer.
 ///
-/// A call that timed out may still be answered later, and that late answer
-/// must not be taken as this call's. Every request gets exactly one answer, so
-/// `sent - taken` on the two rings is how many are still owed; they're
-/// drained first. That needs no state beyond the rings' own counts, so it
-/// also holds across a host restart (`bind` starts from the fabric's counts).
-pub fn invoke<A: Facet<'static>, R: Facet<'static>, const N: usize, const M: usize>(
-    req: &mut ToFabricQueue<A, N>,
+/// Calls can overlap, from several tasks or several threads; each gets the
+/// answer to its own request. Dropping the future abandons the call (the
+/// request may already be with the fabric, but its answer is thrown away when
+/// it comes), so a timeout is just your runtime's timeout around this.
+/// Answers owed to a previous process are dropped the same way.
+pub async fn invoke<A: Facet<'static>, R: Facet<'static>, const N: usize, const M: usize>(
+    req: &ToFabricQueue<A, N>,
     args: &A,
-    resp: &mut FromFabricQueue<R, M>,
-    timeout: Duration,
+    resp: &Answers<R, M>,
 ) -> Result<R, PortError> {
-    let deadline = Instant::now() + timeout;
-    let take = |resp: &mut FromFabricQueue<R, M>| -> Result<R, PortError> {
-        resp.pop_wait(deadline.saturating_duration_since(Instant::now()))?
-            .ok_or(PortError::Timeout(timeout))
+    // Numbered only once there's room, right before the write, so a call
+    // dropped while waiting for room never took a ticket.
+    let mut issued = None;
+    let ticket = match req
+        .send_numbered(args, |k| {
+            resp.expect(k);
+            issued = Some(k);
+        })
+        .await
+    {
+        Ok(t) => t,
+        Err(e) => {
+            if let Some(k) = issued {
+                resp.forget(k);
+            }
+            return Err(e);
+        }
     };
-    while resp.popped() != req.pushed() {
-        take(resp)?;
+    let claim = Claim { resp, ticket };
+    loop {
+        let seen = resp.rung();
+        if let Some(r) = resp.take(ticket)? {
+            std::mem::forget(claim);
+            return Ok(r);
+        }
+        resp.changed(seen).await?;
     }
-    send_by(req, args, deadline, timeout)?;
-    take(resp)
+}
+
+/// Forgets the ticket if the call is dropped (or fails) before its answer
+/// is taken.
+struct Claim<'a, R: Facet<'static>, const M: usize> {
+    resp: &'a Answers<R, M>,
+    ticket: u32,
+}
+
+impl<R: Facet<'static>, const M: usize> Drop for Claim<'_, R, M> {
+    fn drop(&mut self) {
+        self.resp.forget(self.ticket);
+    }
 }

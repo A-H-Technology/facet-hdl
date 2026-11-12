@@ -205,11 +205,6 @@ fn call_of(head: &FnHead, dir: Dir, ret: Option<TokenStream>) -> std::result::Re
         ));
     }
     let params = params_of(&name, head.params.0.stream())?;
-    if dir == Dir::Import && params.iter().any(|(p, _)| p == "timeout") {
-        return Err(format!(
-            "`{name}`: the generated method adds a `timeout` parameter; rename yours"
-        ));
-    }
     Ok(Call {
         dir,
         name,
@@ -324,7 +319,7 @@ fn generate(boundary: &Ident, calls: &[Call]) -> TokenStream {
                     arms.extend(quote! {
                         if let ::core::option::Option::Some(#pattern) = self.#req.pop()? {
                             let result = #invoke;
-                            ::facet_hdl::rpc::respond(&mut self.#resp, &result)?;
+                            ::facet_hdl::rpc::respond(&self.#resp, &result)?;
                             handled += 1;
                         }
                     });
@@ -336,26 +331,25 @@ fn generate(boundary: &Ident, calls: &[Call]) -> TokenStream {
                 for (p, ty) in &c.params {
                     params.extend(quote! { #p: #ty, });
                 }
-                let doc = Literal::string(&format!(
-                    " Calls the fabric's `{fname}`, waiting up to `timeout` for room and for the answer."
-                ));
                 if c.oneway {
+                    let doc = Literal::string(&format!(
+                        " Hands the fabric's `{fname}` its arguments, waiting only for room in the queue."
+                    ));
                     methods.extend(quote! {
                         #[doc = #doc]
-                        pub fn #fname(&mut self, #params timeout: ::core::time::Duration)
-                            -> ::core::result::Result<(), ::facet_hdl::PortError>
-                        {
-                            ::facet_hdl::rpc::send(&mut self.#req, &#args_value, timeout)
+                        pub async fn #fname(&self, #params) -> ::core::result::Result<(), ::facet_hdl::PortError> {
+                            self.#req.send(&#args_value).await
                         }
                     });
                 } else {
-                    ports.extend(quote! { pub #resp: ::facet_hdl::FromFabricQueue<#ret, #depth>, });
+                    let doc = Literal::string(&format!(
+                        " Calls the fabric's `{fname}`. Calls may overlap; dropping the future abandons the call."
+                    ));
+                    ports.extend(quote! { pub #resp: ::facet_hdl::rpc::Answers<#ret, #depth>, });
                     methods.extend(quote! {
                         #[doc = #doc]
-                        pub fn #fname(&mut self, #params timeout: ::core::time::Duration)
-                            -> ::core::result::Result<#ret, ::facet_hdl::PortError>
-                        {
-                            ::facet_hdl::rpc::invoke(&mut self.#req, &#args_value, &mut self.#resp, timeout)
+                        pub async fn #fname(&self, #params) -> ::core::result::Result<#ret, ::facet_hdl::PortError> {
+                            ::facet_hdl::rpc::invoke(&self.#req, &#args_value, &self.#resp).await
                         }
                     });
                 }
@@ -368,17 +362,19 @@ fn generate(boundary: &Ident, calls: &[Call]) -> TokenStream {
         let first_req = Ident::new(&format!("{}_req", first.name), first.name.span());
         methods.extend(quote! {
             /// Answers at most one waiting call per exported fn. Returns how many it answered.
-            pub fn poll(&mut self) -> ::core::result::Result<usize, ::facet_hdl::PortError> {
+            pub fn poll(&self) -> ::core::result::Result<usize, ::facet_hdl::PortError> {
                 let mut handled = 0usize;
                 #arms
                 ::core::result::Result::Ok(handled)
             }
 
             /// Answers calls forever, sleeping on the interrupt while there are none.
-            pub fn serve(&mut self) -> ::core::result::Result<::core::convert::Infallible, ::facet_hdl::PortError> {
+            /// Runs alongside imported calls on the same boundary.
+            pub async fn serve(&self) -> ::core::result::Result<::core::convert::Infallible, ::facet_hdl::PortError> {
                 loop {
+                    let idle = ::facet_hdl::rpc::Idle::start(&self.#first_req);
                     if self.poll()? == 0 {
-                        ::facet_hdl::rpc::wait(&self.#first_req, ::core::time::Duration::from_secs(1))?;
+                        idle.wait().await?;
                     }
                 }
             }
@@ -465,7 +461,7 @@ mod tests {
             "{out}"
         );
         assert!(
-            out.contains("ping_resp : :: facet_hdl :: FromFabricQueue < () , 4 >"),
+            out.contains("ping_resp : :: facet_hdl :: rpc :: Answers < () , 4 >"),
             "{out}"
         );
         assert!(!out.contains("TickArgs"), "{out}");
@@ -479,14 +475,14 @@ mod tests {
                 .unwrap();
         let out = expand(TokenStream::new(), item).unwrap().to_string();
         assert!(!out.contains("pub fn scale (x"), "the bodiless fn is gone: {out}");
-        assert!(out.contains("pub fn scale (& mut self , x : u16 , timeout"), "{out}");
+        assert!(out.contains("pub async fn scale (& self , x : u16 ,)"), "{out}");
         assert!(out.contains("Result < u32 , :: facet_hdl :: PortError >"), "{out}");
         assert!(
             out.contains("scale_req : :: facet_hdl :: ToFabricQueue < ScaleArgs , 8 >"),
             "{out}"
         );
         assert!(
-            out.contains("scale_resp : :: facet_hdl :: FromFabricQueue < u32 , 8 >"),
+            out.contains("scale_resp : :: facet_hdl :: rpc :: Answers < u32 , 8 >"),
             "{out}"
         );
         assert!(!out.contains("led_resp"), "{out}");
@@ -499,7 +495,6 @@ mod tests {
         assert!(err("mod m { fn f(x: u8) {} }").contains("no #[export] or #[import]"));
         assert!(err("mod m { #[import] fn f(x: u8) -> u8 { x } }").contains("no body"));
         assert!(err("mod m { #[export] fn f(x: u8); }").contains("needs a body"));
-        assert!(err("mod m { #[import] fn f(timeout: u8); }").contains("rename yours"));
         assert!(err("mod m { #[export] fn f(&self, x: u8) {} }").contains("free functions"));
         assert!(err("mod m { #[export] fn f(x: u8) where u8: Copy {} }").contains("generic"));
         assert!(err("mod m { #[export(depth = 3)] fn f(x: u8) {} }").contains("power of two"));

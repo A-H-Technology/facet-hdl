@@ -1,14 +1,18 @@
 //! `#[import]`: Rust calls HDL. Also `()` entries both ways: `ping` takes no
 //! arguments and answers `()`, `tick` is an export with no arguments, and
 //! `last_tick` is an import with none. `slow` answers late, to show that a
-//! call that timed out can't hand its answer to the next one.
+//! call that was given up on can't hand its answer to the next one.
 
-use facet_hdl::{PortError, bind};
+use facet_hdl::bind;
+use futures::future::join_all;
+use futures::poll;
+use std::pin::pin;
 use facet_hdl_iverilog::Sim;
 use facet_hdl_spade::{FLAT_AXI_GLUE, FLAT_AXI_PORTS, Spade};
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+use tokio::time::timeout;
 
 pub static TICKS: Mutex<u8> = Mutex::new(0);
 
@@ -101,8 +105,8 @@ entity dev_top(
     )
 }
 
-#[test]
-fn rust_calls_the_fabric() {
+#[tokio::test]
+async fn rust_calls_the_fabric() {
     let work = Path::new(env!("CARGO_TARGET_TMPDIR")).join("spade-dev-sim");
     std::fs::create_dir_all(&work).unwrap();
     let sv = Spade::of::<dev::Dev>()
@@ -116,41 +120,80 @@ fn rust_calls_the_fabric() {
         .build()
         .unwrap();
     let (transport, _clk) = sim.spawn().unwrap();
-    let mut dev: dev::Dev = bind(transport).unwrap();
+    let again = transport.share();
+    let dev: dev::Dev = bind(transport).unwrap();
     let t = Duration::from_secs(5);
 
-    // The fabric calls `tick` three times on its own; answer them.
-    let deadline = Instant::now() + t;
-    while *TICKS.lock().unwrap() < 3 {
-        assert!(Instant::now() < deadline, "the fabric didn't call tick three times");
-        dev.poll().unwrap();
-    }
-    assert_eq!(dev.last_tick(t).unwrap(), 3, "the fabric saw tick's answers");
+    // The fabric calls `tick` three times on its own; `serve` answers them
+    // while the calls below run on the same boundary.
+    let calls = async {
+        let deadline = Instant::now() + t;
+        while *TICKS.lock().unwrap() < 3 {
+            assert!(Instant::now() < deadline, "the fabric didn't call tick three times");
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        assert_eq!(dev.last_tick().await.unwrap(), 3, "the fabric saw tick's answers");
 
-    for x in [0, 1, 1000, u16::MAX] {
-        assert_eq!(dev.scale(x, t).unwrap(), 3 * x as u32);
-    }
-    // Eight in flight, straight through the queues.
-    for x in 0..8u16 {
-        dev.scale_req.push(&dev::ScaleArgs { x }).unwrap();
-    }
-    for x in 0..8u16 {
-        assert_eq!(dev.scale_resp.pop_wait(t).unwrap(), Some(3 * x as u32));
+        for x in [0, 1, 1000, u16::MAX] {
+            assert_eq!(dev.scale(x).await.unwrap(), 3 * x as u32);
+        }
+        // Eight in flight at once, each handed its own answer.
+        let xs: Vec<u16> = (0..8).map(|i| i * 1000 + 7).collect();
+        let answers = join_all(xs.iter().map(|&x| dev.scale(x))).await;
+        for (x, a) in xs.iter().zip(answers) {
+            assert_eq!(a.unwrap(), 3 * *x as u32);
+        }
+
+        for _ in 0..10 {
+            dev.ping().await.unwrap();
+        }
+
+        for on in [true, false, true] {
+            dev.set_led(on).await.unwrap();
+            assert_eq!(dev.led().await.unwrap(), on);
+        }
+
+    };
+    tokio::select! {
+        r = dev.serve() => panic!("serve ended: {:?}", r.map(|n| match n {})),
+        r = timeout(Duration::from_secs(60), calls) => r.expect("the calls hung"),
     }
 
-    for _ in 0..10 {
-        dev.ping(t).unwrap();
+    // From here on `serve` is gone, so the simulation only advances while
+    // one of our calls waits: thousands of cycles can't pass between two
+    // polls.
+
+    // Claimed out of order: `later` pops `first`'s answer on the way to its
+    // own and has to keep it for `first`. slow answers one at a time, 2000
+    // cycles each.
+    {
+        let (mut first, mut later) = (pin!(dev.slow(30)), pin!(dev.slow(40)));
+        assert!(poll!(&mut first).is_pending(), "sent, not yet answered");
+        assert!(poll!(&mut later).is_pending(), "sent, not yet answered");
+        assert_eq!(timeout(t, later).await.expect("hung").unwrap(), 41);
+        assert_eq!(timeout(t, first).await.expect("first's answer was lost").unwrap(), 31);
     }
 
-    for on in [true, false, true] {
-        dev.set_led(on, t).unwrap();
-        assert_eq!(dev.led(t).unwrap(), on);
-    }
-
-    assert!(matches!(dev.slow(1, Duration::ZERO), Err(PortError::Timeout(_))));
+    // Nothing advances the simulation now, so
+    // slow's answer can't be there yet when the timeout gives up. Its answer
+    // still comes, and must not become the next call's.
+    let given_up = timeout(Duration::ZERO, dev.slow(1)).await;
+    assert!(given_up.is_err(), "{given_up:?}");
     assert_eq!(
-        dev.slow(2, t).unwrap(),
+        timeout(t, dev.slow(2)).await.expect("hung").unwrap(),
         3,
         "slow(1)'s late answer was taken as slow(2)'s"
+    );
+
+    // Same again across a host restart: the old binding's owed answer reaches
+    // the new one and must be dropped there too.
+    let given_up = timeout(Duration::ZERO, dev.slow(10)).await;
+    assert!(given_up.is_err(), "{given_up:?}");
+    drop(dev);
+    let dev: dev::Dev = bind(again).unwrap();
+    assert_eq!(
+        timeout(t, dev.slow(20)).await.expect("hung").unwrap(),
+        21,
+        "the previous host's slow(10) answered this one"
     );
 }

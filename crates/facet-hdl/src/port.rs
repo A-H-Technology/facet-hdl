@@ -1,5 +1,6 @@
 //! The host side of a boundary: the declaration's own fields become handles.
 
+use crate::bell::Doorbell;
 use crate::boundary::{Boundary, FINGERPRINT_WORD, PortKind, queue};
 use crate::codec::{self, DecodeError};
 use crate::hw::{HwType, LayoutError};
@@ -7,6 +8,7 @@ use facet::{Facet, Partial};
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io;
 use std::marker::PhantomData;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -53,11 +55,13 @@ pub trait Interrupt: Send {
 /// fd, so until that child execs (or forever, if it never does) the lock
 /// outlives this binding.
 ///
-/// The interrupt has its own lock so a blocked waiter never holds up register
-/// traffic on other ports.
+/// The interrupt lives on the bell's thread, so a blocked waiter never holds
+/// up register traffic.
 struct Bus {
     transport: Mutex<Box<dyn Transport>>,
-    irq: Option<Mutex<Box<dyn Interrupt>>>,
+    bell: Arc<Doorbell>,
+    /// Without a line every wait is a timed re-poll.
+    has_irq: bool,
     _owner: File,
 }
 
@@ -65,18 +69,11 @@ impl Bus {
     fn lock(&self) -> std::sync::MutexGuard<'_, Box<dyn Transport>> {
         self.transport.lock().unwrap_or_else(|e| e.into_inner())
     }
+}
 
-    /// Sleeps until the irq line might mean there's work, or `timeout`.
-    fn wait_irq(&self, timeout: Duration) -> io::Result<()> {
-        match &self.irq {
-            Some(irq) => irq.lock().unwrap_or_else(|e| e.into_inner()).wait(timeout).map(drop),
-            // No line to sleep on: give other threads the CPU and let the
-            // caller poll again.
-            None => {
-                std::thread::yield_now();
-                Ok(())
-            }
-        }
+impl Drop for Bus {
+    fn drop(&mut self) {
+        self.bell.close();
     }
 }
 
@@ -161,32 +158,88 @@ pub struct FromFabric<T> {
     _t: PhantomData<T>,
 }
 
+/// A queue end's view of its ring, behind a lock so the end can be shared
+/// (`&self`): a second producer or consumer in this process is serialized
+/// here, and the window lock covers other processes.
+#[doc(hidden)]
+#[derive(Facet)]
+pub struct Cursor {
+    #[facet(opaque)]
+    counts: Mutex<Counts>,
+}
+
+#[derive(Default)]
+struct Counts {
+    head: u32,
+    tail: u32,
+    /// Only used by [`Answers`].
+    inbox: Inbox,
+}
+
+impl Cursor {
+    fn new(head: u32, tail: u32) -> Self {
+        Self {
+            counts: Mutex::new(Counts {
+                head,
+                tail,
+                inbox: Inbox::default(),
+            }),
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Counts> {
+        self.counts.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
 /// Host -> fabric SPSC ring of `N` entries. The fabric sees `<name>`,
 /// `<name>_valid` and drives `<name>_ready`; an entry is consumed on a cycle
 /// where both are high.
+///
+/// `head` is our own count (we're the only producer, so it's authoritative);
+/// `tail` is the fabric's as last read, only refreshed when the ring looks
+/// full, so a push normally costs no reads at all.
 #[derive(Facet)]
 pub struct ToFabricQueue<T, const N: usize> {
     port: Port,
-    /// Our own count. We're the only producer, so it's authoritative.
-    head: u32,
-    /// The fabric's consumer count as last read; only refreshed when the ring
-    /// looks full, so a push normally costs no reads at all.
-    tail: u32,
+    cursor: Cursor,
     _t: PhantomData<T>,
 }
 
 /// Fabric -> host SPSC ring of `N` entries. The fabric drives `<name>` and
 /// `<name>_valid` and sees `<name>_ready` (not full); an entry is pushed on a
 /// cycle where both are high.
+///
+/// `head` is the fabric's count as last read, only refreshed when the ring
+/// looks empty; `tail` is our own.
 #[derive(Facet)]
 pub struct FromFabricQueue<T, const N: usize> {
     port: Port,
-    /// The fabric's producer count as last read; only refreshed when the ring
-    /// looks empty.
-    head: u32,
-    /// Our own count. We're the only consumer, so it's authoritative.
-    tail: u32,
+    cursor: Cursor,
     _t: PhantomData<T>,
+}
+
+/// The answers to an `#[import]`: a fabric -> host ring where entry `k`
+/// answers request `k`, claimed by that number instead of popped in order.
+///
+/// That's what lets calls overlap. Each caller waits for its own answer;
+/// whoever pops someone else's parks it for them, and an answer whose caller
+/// gave up (or belongs to a previous process) is dropped on arrival. Popping
+/// in plain FIFO order would hand those to whoever asked next, which is why
+/// this isn't a `FromFabricQueue`.
+#[derive(Facet)]
+pub struct Answers<T, const N: usize> {
+    port: Port,
+    cursor: Cursor,
+    _t: PhantomData<T>,
+}
+
+/// Tickets of calls still waiting, and answers popped before their caller
+/// came for them (still encoded).
+#[derive(Default)]
+struct Inbox {
+    waiting: BTreeSet<u32>,
+    parked: BTreeMap<u32, Vec<u32>>,
 }
 
 impl<T: Facet<'static>> ToFabric<T> {
@@ -220,108 +273,201 @@ impl<T: Facet<'static>> FromFabric<T> {
     }
 }
 
-// `&mut self` on both queue ends: each is a field the binding owns, so a
-// second producer or consumer in this process is a borrow error, and #1's
-// window lock covers other processes.
-impl<T: Facet<'static>, const N: usize> ToFabricQueue<T, N> {
-    /// Entries this ring has ever taken (a free-running count).
-    pub fn pushed(&self) -> u32 {
-        self.head
+impl Port {
+    fn bell(&self) -> &Doorbell {
+        &self.bus.bell
     }
 
-    pub fn push(&mut self, value: &T) -> Result<(), PushError> {
-        if self.head.wrapping_sub(self.tail) as usize >= N {
-            let (head, tail) = self.port.queue_counters(N)?;
-            if head != self.head {
-                return Err(self
-                    .port
-                    .desync(head, tail, "fabric head differs from ours; another producer?")
-                    .into());
-            }
-            self.tail = tail;
-            if head.wrapping_sub(tail) as usize >= N {
-                return Err(PushError::Full);
-            }
+    /// Resolves once the fabric might have changed: the irq rang, or (with
+    /// `tick`, or without a line at all) a short poll interval passed.
+    pub(crate) async fn changed(&self, seen: u64, tick: bool) -> Result<(), PortError> {
+        Ok(self.bell().rang(seen, tick || !self.bus.has_irq).await?)
+    }
+
+    /// `true` if the ring has room, refreshing our view of `tail` if it
+    /// looked full.
+    fn has_room(&self, c: &mut Counts, depth: usize) -> Result<bool, PortError> {
+        if (c.head.wrapping_sub(c.tail) as usize) < depth {
+            return Ok(true);
         }
-        let words = codec::encode(value, &self.port.ty);
-        let next = self.head.wrapping_add(1);
+        let (head, tail) = self.queue_counters(depth)?;
+        if head != c.head {
+            return Err(self.desync(head, tail, "fabric head differs from ours; another producer?"));
+        }
+        c.tail = tail;
+        Ok((head.wrapping_sub(tail) as usize) < depth)
+    }
+
+    /// Writes entry `c.head` and advances it. The caller checked for room.
+    fn push_words(&self, c: &mut Counts, words: &[u32]) -> Result<(), PortError> {
+        let next = c.head.wrapping_add(1);
         if words.is_empty() {
             // A `()` entry has no last word to commit on, so the push is the
             // new absolute head, idempotent like a pop's tail write.
-            self.port
-                .bus
-                .lock()
-                .write(self.port.word + queue::HEAD, next)
-                .map_err(PortError::from)?;
+            self.bus.lock().write(self.word + queue::HEAD, next)?;
         } else {
-            self.port
-                .write_words(self.port.word + queue::ENTRY, &words)
-                .map_err(PortError::from)?;
+            self.write_words(self.word + queue::ENTRY, words)?;
         }
-        self.head = next;
+        c.head = next;
         Ok(())
+    }
+
+    /// The oldest entry's words and its number, or `None` if the fabric
+    /// hasn't produced one.
+    fn pop_words(&self, c: &mut Counts, depth: usize) -> Result<Option<(u32, Vec<u32>)>, PortError> {
+        if c.head == c.tail {
+            let (head, tail) = self.queue_counters(depth)?;
+            if tail != c.tail {
+                return Err(self.desync(head, tail, "fabric tail differs from ours; another consumer?"));
+            }
+            c.head = head;
+            if head == tail {
+                return Ok(None);
+            }
+        }
+        let index = c.tail;
+        let next = index.wrapping_add(1);
+        // The pop is committed before decoding: an entry that doesn't decode
+        // is garbage either way, and leaving it would wedge the queue.
+        let words = self.read_words(self.word + queue::ENTRY)?;
+        self.bus.lock().write(self.word + queue::TAIL, next)?;
+        c.tail = next;
+        Ok(Some((index, words)))
+    }
+
+    fn decode<T: Facet<'static>>(&self, words: &[u32]) -> Result<T, PortError> {
+        Ok(codec::decode(words, &self.ty)?)
+    }
+}
+
+impl<T: Facet<'static>, const N: usize> ToFabricQueue<T, N> {
+    /// Entries this ring has ever taken (a free-running count).
+    pub fn pushed(&self) -> u32 {
+        self.cursor.lock().head
+    }
+
+    pub fn push(&self, value: &T) -> Result<(), PushError> {
+        self.push_numbered(value, |_| {}).map(drop)
+    }
+
+    /// Pushes, calling `numbered` with the entry's number just before the
+    /// fabric can see it.
+    pub(crate) fn push_numbered(&self, value: &T, numbered: impl FnOnce(u32)) -> Result<u32, PushError> {
+        let mut c = self.cursor.lock();
+        if !self.port.has_room(&mut c, N)? {
+            return Err(PushError::Full);
+        }
+        let index = c.head;
+        numbered(index);
+        self.port.push_words(&mut c, &codec::encode(value, &self.port.ty))?;
+        Ok(index)
+    }
+
+    /// Pushes, waiting for room. The fabric has no "room again" interrupt, so
+    /// a full ring is re-polled every few tens of µs.
+    pub async fn send(&self, value: &T) -> Result<(), PortError> {
+        self.send_numbered(value, |_| {}).await.map(drop)
+    }
+
+    pub(crate) async fn send_numbered(&self, value: &T, mut numbered: impl FnMut(u32)) -> Result<u32, PortError> {
+        loop {
+            let seen = self.port.bell().rung();
+            match self.push_numbered(value, &mut numbered) {
+                Ok(index) => return Ok(index),
+                Err(PushError::Full) => self.port.changed(seen, true).await?,
+                Err(PushError::Port(e)) => return Err(e),
+            }
+        }
     }
 }
 
 impl<T: Facet<'static>, const N: usize> FromFabricQueue<T, N> {
     /// Entries ever popped from this ring (a free-running count).
     pub fn popped(&self) -> u32 {
-        self.tail
+        self.cursor.lock().tail
     }
 
     /// The oldest entry, or `None` if the fabric hasn't produced one.
-    pub fn pop(&mut self) -> Result<Option<T>, PortError> {
-        if self.head == self.tail {
-            let (head, tail) = self.port.queue_counters(N)?;
-            if tail != self.tail {
-                return Err(self
-                    .port
-                    .desync(head, tail, "fabric tail differs from ours; another consumer?"));
-            }
-            self.head = head;
-            if head == tail {
-                return Ok(None);
-            }
-        }
-        let next = self.tail.wrapping_add(1);
-        // The pop is committed before decoding: an entry that doesn't decode
-        // is garbage either way, and leaving it would wedge the queue.
-        let words = {
-            let words = self.port.read_words(self.port.word + queue::ENTRY)?;
-            self.port.bus.lock().write(self.port.word + queue::TAIL, next)?;
-            words
-        };
-        self.tail = next;
-        Ok(Some(codec::decode(&words, &self.port.ty)?))
+    pub fn pop(&self) -> Result<Option<T>, PortError> {
+        let popped = self.port.pop_words(&mut self.cursor.lock(), N)?;
+        popped.map(|(_, words)| self.port.decode(&words)).transpose()
     }
 
-    /// Sleeps until the boundary's interrupt is high, meaning some
-    /// `FromFabricQueue` (not necessarily this one) holds an entry, or
-    /// `timeout`. Without an interrupt it returns at once, so callers loop.
-    pub fn wait_irq(&self, timeout: Duration) -> Result<(), PortError> {
-        Ok(self.port.bus.wait_irq(timeout)?)
-    }
-
-    /// Like [`pop`](Self::pop), but sleeps on the boundary's interrupt until
-    /// an entry arrives or `timeout` passes (`Ok(None)`). Without an
-    /// interrupt from the transport it polls instead, so it works anywhere.
+    /// The oldest entry, waiting on the boundary's interrupt until there is
+    /// one. Without an interrupt from the transport it polls instead, so it
+    /// works anywhere.
     ///
     /// One line serves every `FromFabricQueue` in the boundary, so a waiter
     /// can be woken by another queue's entry; it re-checks its own and sleeps
     /// again. While that other entry sits unconsumed the line stays high, so
     /// keep every such queue drained or it turns this into polling.
-    pub fn pop_wait(&mut self, timeout: Duration) -> Result<Option<T>, PortError> {
-        let deadline = Instant::now() + timeout;
+    pub async fn recv(&self) -> Result<T, PortError> {
         loop {
+            let seen = self.port.bell().rung();
             if let Some(v) = self.pop()? {
-                return Ok(Some(v));
+                return Ok(v);
             }
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                return Ok(None);
-            }
-            self.port.bus.wait_irq(left)?;
+            self.port.changed(seen, false).await?;
         }
+    }
+
+    /// [`recv`](Self::recv) for plain threads: `Ok(None)` once `timeout` passes.
+    pub fn pop_wait(&self, timeout: std::time::Duration) -> Result<Option<T>, PortError> {
+        crate::block_on_timeout(self.recv(), timeout).transpose()
+    }
+
+    /// Start of an idle wait: see [`crate::rpc::Idle`].
+    pub(crate) fn idle(&self) -> (&Port, u64) {
+        (&self.port, self.port.bell().rung())
+    }
+}
+
+impl<T: Facet<'static>, const N: usize> Answers<T, N> {
+    /// Answers ever popped from this ring, claimed or not.
+    pub fn popped(&self) -> u32 {
+        self.cursor.lock().tail
+    }
+
+    /// Marks `ticket` as a call whose answer to keep. Must happen before the
+    /// request is pushed, or another waiter could pop the answer first and
+    /// drop it as nobody's.
+    pub(crate) fn expect(&self, ticket: u32) {
+        self.cursor.lock().inbox.waiting.insert(ticket);
+    }
+
+    /// The caller gave up on `ticket`: its answer is dropped, now or when it
+    /// arrives.
+    pub(crate) fn forget(&self, ticket: u32) {
+        let mut c = self.cursor.lock();
+        c.inbox.waiting.remove(&ticket);
+        c.inbox.parked.remove(&ticket);
+    }
+
+    /// `ticket`'s answer, popping (and parking or dropping) everything
+    /// ahead of it, or `None` if it hasn't arrived.
+    pub(crate) fn take(&self, ticket: u32) -> Result<Option<T>, PortError> {
+        let mut c = self.cursor.lock();
+        loop {
+            if let Some(words) = c.inbox.parked.remove(&ticket) {
+                c.inbox.waiting.remove(&ticket);
+                return self.port.decode(&words).map(Some);
+            }
+            let Some((index, words)) = self.port.pop_words(&mut c, N)? else {
+                return Ok(None);
+            };
+            if c.inbox.waiting.contains(&index) {
+                c.inbox.parked.insert(index, words);
+            }
+        }
+    }
+
+    /// Resolves once `ticket`'s answer might have arrived.
+    pub(crate) async fn changed(&self, seen: u64) -> Result<(), PortError> {
+        self.port.changed(seen, false).await
+    }
+
+    pub(crate) fn rung(&self) -> u64 {
+        self.port.bell().rung()
     }
 }
 
@@ -341,8 +487,10 @@ pub fn bind<B: Facet<'static>>(transport: impl Transport + 'static) -> Result<B,
         });
     }
 
+    let irq = transport.interrupt();
     let bus = Arc::new(Bus {
-        irq: transport.interrupt().map(Mutex::new),
+        has_irq: irq.is_some(),
+        bell: Doorbell::start(irq),
         transport: Mutex::new(transport),
         _owner: owner,
     });
@@ -371,13 +519,10 @@ pub fn bind<B: Facet<'static>>(transport: impl Transport + 'static) -> Result<B,
             Some((head, tail)) => {
                 p = p
                     .begin_nth_field(1)
-                    .and_then(|p| p.set(head))
-                    .and_then(|p| p.end())
-                    .and_then(|p| p.begin_nth_field(2))
-                    .and_then(|p| p.set(tail))
+                    .and_then(|p| p.set(Cursor::new(head, tail)))
                     .and_then(|p| p.end())
                     .map_err(reflect)?;
-                3
+                2
             }
         };
         p = p

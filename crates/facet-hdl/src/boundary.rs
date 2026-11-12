@@ -2,7 +2,7 @@
 
 use crate::codec::words_for;
 use crate::hw::{HwType, LayoutError};
-use crate::port::{FromFabric, FromFabricQueue, ToFabric, ToFabricQueue};
+use crate::port::{Answers, FromFabric, FromFabricQueue, ToFabric, ToFabricQueue};
 use facet::{ConstTypeId, Facet, Shape, Type, UserType};
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -87,6 +87,7 @@ impl Boundary {
             (FromFabric::<()>::SHAPE.decl_id, Direction::FromFabric, false),
             (ToFabricQueue::<(), 2>::SHAPE.decl_id, Direction::ToFabric, true),
             (FromFabricQueue::<(), 2>::SHAPE.decl_id, Direction::FromFabric, true),
+            (Answers::<(), 2>::SHAPE.decl_id, Direction::FromFabric, true),
         ];
 
         let mut word = FINGERPRINT_WORD + 1;

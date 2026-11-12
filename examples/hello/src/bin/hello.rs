@@ -3,7 +3,7 @@
 //!
 //!   hello [--base 0x20000000 | --uio NAME]
 
-use facet_hdl::{Transport, bind};
+use facet_hdl::{Transport, bind, block_on, block_on_timeout};
 use facet_hdl_linux::{AGILEX5_LWH2F, DevMem, Uio};
 use hello::hello::Hello;
 use std::process::ExitCode;
@@ -39,8 +39,12 @@ fn parse_addr(s: &str) -> Result<u64, Error> {
 }
 
 fn run(transport: impl Transport + 'static) -> Result<(), Error> {
-    let mut fabric: Hello = bind(transport)?;
-    println!("add_one(41) = {}", fabric.add_one(41, Duration::from_millis(100))?);
+    let fabric: Hello = bind(transport)?;
+    // No runtime needed for two calls; a bigger host would use tokio, and
+    // `serve` and the calls would be tasks side by side.
+    let answer = block_on_timeout(fabric.add_one(41), Duration::from_millis(100))
+        .ok_or("the fabric didn't answer add_one within 100 ms")??;
+    println!("add_one(41) = {answer}");
     println!("press the button");
-    match fabric.serve()? {}
+    match block_on(fabric.serve())? {}
 }

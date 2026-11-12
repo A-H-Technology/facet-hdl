@@ -108,7 +108,7 @@ fn job(seq: u32) -> Job {
 fn run_both_directions(stall_mask: u32) {
     const N: u32 = 300;
     let (transport, _clk) = sim().spawn().unwrap();
-    let mut p: Pipe = bind(transport).unwrap();
+    let p: Pipe = bind(transport).unwrap();
     p.stall.write(&stall_mask).unwrap();
 
     let (mut sent, mut received, mut fulls, mut idle) = (0u32, 0u32, 0u32, 0u32);
@@ -159,7 +159,7 @@ fn full_rate_both_ways_with_the_fabric_stalling() {
 fn a_full_queue_refuses_the_push_and_leaves_the_fabric_untouched() {
     let (transport, _clk) = sim().spawn().unwrap();
     let mut raw: SimTransport = transport.share();
-    let mut p: Pipe = bind(transport).unwrap();
+    let p: Pipe = bind(transport).unwrap();
     let jobs = Boundary::of::<Pipe>().unwrap().ports[0].clone();
 
     p.stall.write(&u32::MAX).unwrap();
@@ -197,7 +197,7 @@ fn a_full_queue_refuses_the_push_and_leaves_the_fabric_untouched() {
 fn irq_is_high_exactly_while_results_are_waiting() {
     let (transport, _clk) = sim().spawn().unwrap();
     let mut line = transport.share().interrupt().expect("built with .irq()");
-    let mut p: Pipe = bind(transport).unwrap();
+    let p: Pipe = bind(transport).unwrap();
     let short = Duration::from_millis(50);
 
     assert!(!line.wait(short).unwrap(), "nothing produced yet");
@@ -214,7 +214,7 @@ fn irq_is_high_exactly_while_results_are_waiting() {
 #[test]
 fn pop_wait_wakes_on_the_interrupt_not_the_timeout() {
     let (transport, _clk) = sim().spawn().unwrap();
-    let mut p: Pipe = bind(transport).unwrap();
+    let p: Pipe = bind(transport).unwrap();
     p.stall.write(&0b1011).unwrap();
     let timeout = Duration::from_secs(30);
     for seq in 0..20 {
@@ -229,7 +229,7 @@ fn pop_wait_wakes_on_the_interrupt_not_the_timeout() {
 #[test]
 fn pop_wait_gives_up_at_the_timeout() {
     let (transport, _clk) = sim().spawn().unwrap();
-    let mut p: Pipe = bind(transport).unwrap();
+    let p: Pipe = bind(transport).unwrap();
     p.stall.write(&u32::MAX).unwrap();
     p.jobs.push(&job(0)).unwrap();
     let started = Instant::now();

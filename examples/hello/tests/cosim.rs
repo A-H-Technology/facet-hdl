@@ -1,6 +1,6 @@
 //! The real host code against the real fabric Spade, under Icarus Verilog.
 
-use facet_hdl::bind;
+use facet_hdl::{bind, block_on_timeout};
 use facet_hdl_iverilog::Sim;
 use facet_hdl_spade::{FLAT_AXI_GLUE, FLAT_AXI_PORTS, Source, Spade};
 use hello::hello::Hello;
@@ -55,11 +55,12 @@ entity hello_top(
 #[test]
 fn rust_calls_the_fabric_and_the_fabric_calls_rust() {
     let (transport, clk) = sim().spawn().unwrap();
-    let mut fabric: Hello = bind(transport).unwrap();
+    let fabric: Hello = bind(transport).unwrap();
     let t = Duration::from_secs(5);
+    let add_one = |x| block_on_timeout(fabric.add_one(x), t).expect("no answer").unwrap();
 
-    assert_eq!(fabric.add_one(41, t).unwrap(), 42);
-    assert_eq!(fabric.add_one(u32::MAX, t).unwrap(), 0, "wraps, like the Spade says");
+    assert_eq!(add_one(41), 42);
+    assert_eq!(add_one(u32::MAX), 0, "wraps, like the Spade says");
 
     // One press, one call: answer it, then nothing more comes.
     let deadline = Instant::now() + t;

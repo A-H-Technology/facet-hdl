@@ -143,13 +143,14 @@ fn the_fabric_calls_rust() {
         .build()
         .unwrap();
     let (transport, _clk) = sim.spawn().unwrap();
-    let mut calc: calc::Calc = bind(transport).unwrap();
+    let calc: calc::Calc = bind(transport).unwrap();
 
     let deadline = Instant::now() + Duration::from_secs(60);
     while REPORTS.lock().unwrap().is_empty() {
         assert!(Instant::now() < deadline, "the fabric never reported");
+        let idle = facet_hdl::rpc::Idle::start(&calc.add_req);
         if calc.poll().unwrap() == 0 {
-            facet_hdl::rpc::wait(&calc.add_req, Duration::from_millis(10)).unwrap();
+            facet_hdl::block_on_timeout(idle.wait(), Duration::from_millis(10));
         }
     }
     assert_eq!(
