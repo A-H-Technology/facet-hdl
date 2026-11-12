@@ -54,26 +54,27 @@ entity pipe_top(
     irq: inv bool,
 ) {{
 {FLAT_AXI_GLUE}
-    let (job, job_inv) = port();
-    let (job_valid, job_valid_inv) = port();
-    let (done_ready, done_ready_inv) = port();
-    let (stall, stall_inv) = port();
-    let (stall_written, stall_written_inv) = port();
-    let _: bool = stall_written;
+    let p = inst pipe_regs(clk, rst, axi);
+    set axi_out_inv = p.axi_out;
+    set irq = p.irq;
 
     reg(clk) lfsr: uint<32> reset(rst: 0xACE1ACE1) = {{
         let feedback: uint<32> = ((lfsr >> 31) ^ (lfsr >> 21) ^ (lfsr >> 1) ^ lfsr) & 1;
         (lfsr << 1) | feedback
     }};
-    let go = (lfsr & stall) == 0;
-    let x: uint<64> = zext(job.x);
-    let y: uint<64> = trunc(x + (x << 1));
-    let _ = inst pipe_regs(
-        clk, rst, axi, axi_out_inv, irq,
-        job_inv, job_valid_inv, done_ready && go,
-        Done(job.seq, y), job_valid && go, done_ready_inv,
-        stall_inv, stall_written_inv,
-    );
+    let go = (lfsr & p.stall) == 0;
+    // One job in, one result out, in the same cycle: a job is only taken
+    // when its result is.
+    set p.done.write = match p.jobs.read {{
+        Some(job) => if go {{
+            let x: uint<64> = zext(job.x);
+            Some(Done(job.seq, x +. (x << 1)))
+        }} else {{
+            None
+        }},
+        None => None,
+    }};
+    set p.jobs.ack = go && !p.done.full;
 }}
 "#
     )

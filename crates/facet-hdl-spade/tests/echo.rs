@@ -131,12 +131,13 @@ entity echo_top(
     irq: inv bool,
 ) {{
 {FLAT_AXI_GLUE}
-    let (input, input_inv) = port();
-    let (written, written_inv) = port();
-    let _: bool = written;
+    let p = inst echo_regs(clk, rst, axi);
+    set axi_out_inv = p.axi_out;
+    set irq = p.irq;
     let golden: Everything = {golden};
-    let matches = pack_everything(input) == pack_everything(golden);
-    let _ = inst echo_regs(clk, rst, axi, axi_out_inv, irq, input_inv, written_inv, input, golden, matches);
+    set p.output = p.input;
+    set p.golden = golden;
+    set p.matches_golden = pack_everything(p.input) == pack_everything(golden);
 }}
 "#,
         golden = literal(&golden).unwrap()

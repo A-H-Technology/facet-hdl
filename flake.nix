@@ -30,8 +30,8 @@
       # Static musl, linked by rust-lld against the self-contained crt in
       # rust-std, so it runs on mercury with no libc dependency at all. Plain
       # mkDerivation because buildRustPackage pins --target to the host.
-      packages.${system}.blinky-hps = pkgs.stdenv.mkDerivation {
-        pname = "blinky";
+      packages.${system}.hello-hps = pkgs.stdenv.mkDerivation {
+        pname = "hello";
         version = "0.1.0";
         src = ./.;
         cargoDeps = platform.importCargoLock {
@@ -44,10 +44,10 @@
         nativeBuildInputs = [ toolchain platform.cargoSetupHook ];
         buildPhase = ''
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld \
-            cargo build --release --offline --target ${hpsTarget} --bin blinky
+            cargo build --release --offline --target ${hpsTarget} --bin hello
         '';
         installPhase = ''
-          install -Dm755 target/${hpsTarget}/release/blinky $out/bin/blinky
+          install -Dm755 target/${hpsTarget}/release/hello $out/bin/hello
         '';
       };
 

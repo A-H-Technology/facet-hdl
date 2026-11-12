@@ -132,3 +132,18 @@ pub enum CallResult<T> {
     Returned { value: T },
     Panicked,
 }
+
+// The fabric's end of a host -> fabric queue, shaped like std::mem::FifoRead:
+// `read` holds the oldest entry while there is one, and setting `ack` takes it.
+pub struct Read<T> {
+    read: Option<T>,
+    ack: inv bool,
+}
+
+// The fabric's end of a fabric -> host queue, shaped like std::mem::FifoWrite:
+// set `write` to offer an entry. While `full`, the write is ignored, so keep
+// offering it.
+pub struct Write<T> {
+    write: inv Option<T>,
+    full: bool,
+}

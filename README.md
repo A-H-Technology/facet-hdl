@@ -1,16 +1,64 @@
 # facet-hdl
 
 Spike: declare the boundary between an SoC FPGA's ARM side (the HPS) and
-its fabric **once**, as Rust types with `#[derive(Facet)]`. Everything else
-comes from that declaration:
+its fabric **once**, in Rust, and get both sides from it. The hello world,
+`examples/hello`, is one call each way:
+
+```rust
+#[facet_hdl::rpc]
+pub mod hello {
+    /// Runs in the fabric; Rust calls it.
+    #[import]
+    pub fn add_one(x: u32) -> u32;
+
+    /// Runs here; the fabric calls it each time the button goes down.
+    #[export(oneway)]
+    pub fn pressed() {
+        println!("hello from the fabric!");
+    }
+}
+```
+
+The fabric half is Spade, written against types generated from that module:
+
+```spade
+use hello::hello_regs;
+
+pub entity hello_fabric(clk: clock, rst: bool, axi: facet_hdl::AxiIn, button: bool)
+    -> (facet_hdl::AxiOut, bool)
+{
+    let p = inst hello_regs(clk, rst, axi);
+
+    // add_one: answered in the cycle Rust's call arrives.
+    set p.add_one_resp.write = match p.add_one_req.read {
+        Some(args) => Some(args.x +. 1),
+        None => None,
+    };
+    set p.add_one_req.ack = !p.add_one_resp.full;
+
+    // pressed: one call per press.
+    reg(clk) was_down: bool reset(rst: false) initial(false) = button;
+    set p.pressed_req.write = if button && !was_down { Some(()) } else { None };
+
+    (p.axi_out, p.irq)
+}
+```
+
+And the HPS side (`src/bin/hello.rs`) is:
+
+```rust
+let mut fabric: Hello = bind(transport)?;
+println!("add_one(41) = {}", fabric.add_one(41, Duration::from_millis(100))?);
+fabric.serve()?; // prints "hello from the fabric!" on every press
+```
+
+Calls are built on ports, which you can also declare directly:
 
 ```rust
 #[derive(Facet)]
-pub struct Blinky {
-    pub leds: ToFabric<LedControl>,     // host writes, fabric reads
-    pub status: FromFabric<LedStatus>,  // fabric drives, host reads
-    pub operands: ToFabric<Operands>,
-    pub sum: FromFabric<Sum>,
+pub struct Adder {
+    pub operands: ToFabric<Operands>,   // host writes, fabric reads
+    pub sum: FromFabric<Sum>,           // fabric drives, host reads
 }
 
 #[derive(Facet)]
@@ -24,12 +72,17 @@ Two kinds of port, each in both directions. `ToFabric`/`FromFabric` are
 registers: one value, last writer wins. `ToFabricQueue`/`FromFabricQueue` are
 SPSC channels: a ring of `N` entries that never drops or repeats one. The host
 gets `push(&T) -> Result<(), PushError>` / `pop() -> Option<T>` on `&mut self`,
-and the fabric gets a `<name>`, `<name>_valid`, `<name>_ready` handshake.
+and the fabric gets the end of a queue shaped like Spade's own
+`std::mem::FifoRead`/`FifoWrite`: `facet_hdl::Read<T> { read: Option<T>,
+ack: inv bool }` for a host -> fabric queue, `facet_hdl::Write<T> { write:
+inv Option<T>, full: bool }` for a fabric -> host one.
 
 - **Spade** (`facet-hdl-spade`): one Spade type per Rust type (structs,
   enums, arrays, `Option`, `Result`), `pack_*`/`unpack_*` functions between
-  each type and its bits, and a `<boundary>_regs` entity whose ports are
-  those types. In front of it sits an AXI4 slave (`facet_hdl.spade`) shaped
+  each type and its bits, and a `<boundary>_regs(clk, rst, axi)` entity that
+  returns one `<Boundary>Ports` struct: the bus's answer, the `irq` line, and
+  a field per port (a value for a register, a `Read`/`Write` end for a
+  queue). In front of it sits an AXI4 slave (`facet_hdl.spade`) shaped
   for the DE25-Nano's lightweight bridge as its phase 1 sets it up: full
   AXI4, 32-bit data, 4-bit IDs echoed, bursts. Your fabric logic is Spade
   and instantiates the register file; the bus is two struct ports
@@ -38,7 +91,7 @@ and the fabric gets a `<name>`, `<name>_valid`, `<name>_ready` handshake.
   pinned to v0.21.0, so there's no swim step. Its output is SystemVerilog,
   which chipsmith reads. (Instantiating the register file straight from VHDL
   or Verilog isn't tried: its struct ports would follow Spade's own layout.)
-- **Host handles** (`facet-hdl`): `bind::<Blinky>(transport)` returns that same
+- **Host handles** (`facet-hdl`): `bind::<Adder>(transport)` returns that same
   struct with live handles: `b.leds.write(&ctl)?`, `b.status.read()?`. There's
   no `read` on a `ToFabric` and no `write` on a `FromFabric`.
 - **A fingerprint** of the layout sits in word 0 of the register window.
@@ -54,12 +107,12 @@ HPS-to-FPGA bridge, but the pieces are separate crates:
 | `facet-hdl-spade` | Spade generator, the AXI4 slave, the in-process compiler; `literal(&value)` renders a Rust value as a Spade constant |
 | `facet-hdl-iverilog` | Co-simulation: Icarus Verilog runs the compiled fabric, and a generated testbench turns stdin lines into AXI4 transactions, a new ID each. `SimTransport` makes the real host code drive it; `vvp sim.vvp +vcd=<file>` dumps waveforms |
 | `facet-hdl-linux` | Linux transports: `DevMem` (uncached `/dev/mem` mapping of the bridge, `AGILEX5_LWH2F = 0x2000_0000`, polls) and `Uio` (a `generic-uio` node: the mapping plus the `irq` line, so `pop_wait` sleeps) |
-| `examples/blinky` | Declaration, hand-written fabric logic (`hdl/blinky_core.spade`), the generator bin, the HPS CLI, and co-sim tests |
+| `examples/hello` | The hello world above: declaration, the fabric (`hdl/hello_fabric.spade`), the generator bin, the HPS CLI, and its co-sim |
 
 ```sh
 nix develop --command cargo test                                 # incl. the iverilog co-sims
-nix develop --command cargo run --features gen --bin blinky-gen  # regenerate examples/blinky/hdl/generated
-nix build .#blinky-hps                            # static aarch64-musl CLI for mercury
+nix develop --command cargo run --features gen --bin hello-gen   # regenerate examples/hello/hdl/generated
+nix build .#hello-hps                                            # static aarch64-musl CLI for mercury
 ```
 
 ## Calls: the fabric calls Rust, Rust calls the fabric
@@ -106,8 +159,9 @@ named after the module (`Calc`) with two queues per fn, `<fn>_req` and
   `scale_resp`, since HDL can't panic.
 - `oneway` drops `_resp`. An exported oneway fn's panic is only reported by
   the panic hook; an imported one's method returns once the call is queued.
-- A fn with no arguments, or an answer of `()`, is a queue of `()`: no data
-  port, only `_valid`/`_ready`. The handshake is the message.
+- A fn with no arguments, or an answer of `()`, is a queue of `()`: the
+  fabric reads or writes `Some(())`, and no data is stored. The handshake is
+  the message.
 
 The rings are FIFO, so answers come back in call order, and up to `depth`
 calls can be in flight. The queues are public fields, so you can also
@@ -150,8 +204,8 @@ Spade lays its own types out.
   recursive types.
   Names that are Spade keywords (`reg`, `port`, `set`, ...), or ports whose
   generated internals would collide, are rejected too.
-- `()` can only be a whole queue entry, which has no entry words. The fabric
-  sees `_valid`/`_ready` only. The host pops by writing the tail as usual,
+- `()` can only be a whole queue entry, which has no entry words and no
+  storage in the fabric. The host pops by writing the tail as usual,
   and pushes by writing the new absolute head to the head word. There's no
   entry word to commit on, and writing the absolute count, like a pop does,
   makes a retried write harmless.
@@ -167,7 +221,8 @@ Spade lays its own types out.
   response to an earlier `ToFabric` write, however close together the two
   are. Request/response over plain ports needs a field the fabric bumps once
   the answer is valid (a generation counter, like `Sum::calls`), and the host
-  waits for it with `FromFabric::read_until`; `blinky::add` shows the pattern.
+  waits for it with `FromFabric::read_until`; `add` in
+  `crates/facet-hdl-spade/tests/registers.rs` shows the pattern.
   A `ToFabric` port is a mailbox, so a write replaces a request still in
   flight. Queue ports are for traffic that can't lose messages.
 - A **queue** has a free-running u32 head (producer count) and tail (consumer
@@ -235,11 +290,16 @@ watching it fail.
   literal checks packing and unpacking *separately*, so a symmetric bug can't
   hide behind the loopback. A planted field-order bug fails the packing
   check, and a payload read one bit low fails the unpacking one.
-- Blinky co-sim (the Spade core): bind/fingerprint, 3-word signed sums, LED
-  patterns, snapshotted 64-bit uptime, a 200-cycle adder showing
-  write-then-read returning a stale value and `blinky::add` returning the
-  right one, a torn commit through an unowned second accessor, and the
-  checked-in `hdl/generated/` matching the declaration.
+- Hello co-sim: Rust's `add_one(41)` comes back 42 (and `u32::MAX`
+  wraps to 0), and one 20-cycle button press calls `pressed` exactly once.
+  A fabric answering `x` instead of `x + 1` fails, and so does one without
+  the edge detection (more than one call per press). The checked-in
+  `hdl/generated/` has to match the declaration.
+- Register co-sim (an adder over plain registers): bind/fingerprint, 3-word
+  signed sums, a snapshotted 64-bit cycle counter, a 200-cycle adder showing
+  write-then-read returning a stale value and the generation-counter wait
+  returning the right one, and a torn commit through an unowned second
+  accessor.
 - Queue co-sim: a Spade pipeline (`jobs` → ×3 → `done`) runs 300 sequenced
   jobs both ways at full rate, once free-running and once with an LFSR
   stalling it. It checks for gaps, duplicates and corrupt 2- and 3-word
@@ -275,7 +335,7 @@ watching it fail.
 
 ## Not yet: running on mercury
 
-Nothing has touched hardware. `blinky-hps` builds. chipsmith builds and loads
+Nothing has touched hardware. `hello-hps` builds. chipsmith builds and loads
 DE25-Nano cores itself now, and mercury boots chipsmith's HPS-first phase 1
 from QSPI (chipsmith 98c0898), so what's left is the bridge:
 
@@ -292,8 +352,9 @@ from QSPI (chipsmith 98c0898), so what's left is the bridge:
    to an FPGA-to-HPS interrupt as a level-high SPI (`f2h_irq0` already works
    on the board), plus `uio_pdrv_genirq.of_id=generic-uio` on the kernel
    command line. This belongs in nixos-fpga.
-4. **Then:** `blinky --uio <node name> status`, or `blinky --base
-   0x2000_0000+<component offset> status` without the node.
+4. **Then:** `hello --uio <node name>`, or `hello --base
+   0x2000_0000+<component offset>` without the node, with `button` tied to
+   one of the board's keys.
 
 ## Licence
 

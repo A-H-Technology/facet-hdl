@@ -47,7 +47,7 @@ pub mod dev {
 /// The fabric: implements the imports and calls `tick` three times on its own.
 fn top() -> String {
     format!(
-        r#"use dev::{{dev_regs, ScaleArgs, SetLedArgs, SlowArgs}};
+        r#"use dev::dev_regs;
 use facet_hdl::CallResult;
 
 #[no_mangle(all)]
@@ -58,68 +58,44 @@ entity dev_top(
     irq: inv bool,
 ) {{
 {FLAT_AXI_GLUE}
+    let p = inst dev_regs(clk, rst, axi);
+    set axi_out_inv = p.axi_out;
+    set irq = p.irq;
     decl led_on, slow_busy, slow_x, slow_wait, ticks_sent, last;
-    let (scale_req, scale_req_inv) = port();
-    let (scale_req_valid, scale_req_valid_inv) = port();
-    let (scale_resp_ready, scale_resp_ready_inv) = port();
-    let (ping_req_valid, ping_req_valid_inv) = port();
-    let (ping_resp_ready, ping_resp_ready_inv) = port();
-    let (set_led_req, set_led_req_inv) = port();
-    let (set_led_req_valid, set_led_req_valid_inv) = port();
-    let (led_req_valid, led_req_valid_inv) = port();
-    let (led_resp_ready, led_resp_ready_inv) = port();
-    let (slow_req, slow_req_inv) = port();
-    let (slow_req_valid, slow_req_valid_inv) = port();
-    let (slow_resp_ready, slow_resp_ready_inv) = port();
-    let (tick_req_ready, tick_req_ready_inv) = port();
-    let (tick_resp, tick_resp_inv) = port();
-    let (tick_resp_valid, tick_resp_valid_inv) = port();
-    let (last_tick_req_valid, last_tick_req_valid_inv) = port();
-    let (last_tick_resp_ready, last_tick_resp_ready_inv) = port();
-    let _: bool = tick_req_ready;
 
     // scale: x * 3, answered in the cycle it's asked.
-    let sx: ScaleArgs = scale_req;
-    let x32: uint<32> = zext(sx.x);
-    let scaled: uint<32> = trunc(x32 + (x32 << 1));
+    set p.scale_resp.write = match p.scale_req.read {{
+        Some(args) => {{ let x: uint<32> = zext(args.x); Some(x +. (x << 1)) }},
+        None => None,
+    }};
+    set p.scale_req.ack = !p.scale_resp.full;
+
+    // ping: no arguments, nothing to say back but "done".
+    set p.ping_resp.write = p.ping_req.read;
+    set p.ping_req.ack = !p.ping_resp.full;
 
     // set_led / led: a register, written oneway, read back by a call.
-    let sl: SetLedArgs = set_led_req;
-    reg(clk) led_on: bool initial(false) = if set_led_req_valid {{ sl.lit }} else {{ led_on }};
+    set p.set_led_req.ack = true;
+    reg(clk) led_on: bool initial(false) = match p.set_led_req.read {{ Some(args) => args.lit, None => led_on }};
+    set p.led_resp.write = match p.led_req.read {{ Some(_) => Some(led_on), None => None }};
+    set p.led_req.ack = !p.led_resp.full;
 
-    // slow: x + 1, but only SLOW cycles after the call.
-    let slow_ready = !slow_busy;
-    let slow_done = slow_busy && slow_wait == 2000;
-    let sa: SlowArgs = slow_req;
-    reg(clk) slow_busy: bool initial(false) =
-        if slow_req_valid && slow_ready {{ true }} else if slow_done && slow_resp_ready {{ false }} else {{ slow_busy }};
-    reg(clk) slow_x: uint<8> initial(0) = if slow_req_valid && slow_ready {{ sa.x }} else {{ slow_x }};
-    reg(clk) slow_wait: uint<16> initial(0) =
-        if slow_req_valid && slow_ready {{ 0 }} else if slow_busy && slow_wait < 2000 {{ trunc(slow_wait + 1) }} else {{ slow_wait }};
+    // slow: x + 1, but only 2000 cycles after the call.
+    let take = !slow_busy && match p.slow_req.read {{ Some(_) => true, None => false }};
+    let answer = slow_busy && slow_wait == 2000;
+    set p.slow_req.ack = take;
+    set p.slow_resp.write = if answer {{ Some(slow_x +. 1) }} else {{ None }};
+    reg(clk) slow_busy: bool initial(false) = if take {{ true }} else if answer && !p.slow_resp.full {{ false }} else {{ slow_busy }};
+    reg(clk) slow_x: uint<8> initial(0) = match (take, p.slow_req.read) {{ (true, Some(args)) => args.x, _ => slow_x }};
+    reg(clk) slow_wait: uint<16> initial(0) = if take {{ 0 }} else if slow_busy && slow_wait < 2000 {{ slow_wait +. 1 }} else {{ slow_wait }};
 
-    // tick: three calls into Rust, keeping the last answer.
-    reg(clk) ticks_sent: uint<2> initial(0) = if ticks_sent < 3 && tick_req_ready {{ trunc(ticks_sent + 1) }} else {{ ticks_sent }};
-    reg(clk) last: uint<8> initial(0) = match (tick_resp_valid, tick_resp) {{
-        (true, CallResult::Returned(v)) => v,
-        _ => last,
-    }};
-
-    let _ = inst dev_regs(
-        clk, rst, axi, axi_out_inv, irq,
-        scale_req_inv, scale_req_valid_inv, scale_resp_ready,
-        scaled, scale_req_valid, scale_resp_ready_inv,
-        ping_req_valid_inv, ping_resp_ready,
-        ping_req_valid, ping_resp_ready_inv,
-        set_led_req_inv, set_led_req_valid_inv, true,
-        led_req_valid_inv, led_resp_ready,
-        led_on, led_req_valid, led_resp_ready_inv,
-        slow_req_inv, slow_req_valid_inv, slow_ready,
-        slow_x.wrapping_add(1), slow_done, slow_resp_ready_inv,
-        ticks_sent < 3, tick_req_ready_inv,
-        tick_resp_inv, tick_resp_valid_inv, true,
-        last_tick_req_valid_inv, last_tick_resp_ready,
-        last, last_tick_req_valid, last_tick_resp_ready_inv,
-    );
+    // tick: three calls into Rust, keeping the last answer for last_tick.
+    set p.tick_req.write = if ticks_sent < 3 {{ Some(()) }} else {{ None }};
+    reg(clk) ticks_sent: uint<2> initial(0) = if ticks_sent < 3 && !p.tick_req.full {{ ticks_sent +. 1 }} else {{ ticks_sent }};
+    set p.tick_resp.ack = true;
+    reg(clk) last: uint<8> initial(0) = match p.tick_resp.read {{ Some(CallResult::Returned(v)) => v, _ => last }};
+    set p.last_tick_resp.write = match p.last_tick_req.read {{ Some(_) => Some(last), None => None }};
+    set p.last_tick_req.ack = !p.last_tick_resp.full;
 }}
 "#
     )

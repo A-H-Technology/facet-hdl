@@ -23,7 +23,8 @@ pub fn entity_name(b: &Boundary) -> String {
 
 #[derive(Default)]
 struct Parts {
-    ports: String,
+    /// Fields of the returned `<Boundary>Ports`: name, type, value.
+    fields: Vec<(String, String, String)>,
     body: String,
     /// `word => expression` arms of the read mux.
     reads: String,
@@ -95,7 +96,7 @@ pub fn generate(b: &Boundary) -> Result<String, NameError> {
             PortKind::Register => register(p, &mut scope)?,
             PortKind::Queue { depth } => queue_port(p, depth, &mut scope)?,
         };
-        all.ports.push_str(&part.ports);
+        all.fields.extend(part.fields);
         all.body.push_str(&part.body);
         all.reads.push_str(&part.reads);
         all.irq.extend(part.irq);
@@ -105,19 +106,24 @@ pub fn generate(b: &Boundary) -> Result<String, NameError> {
     } else {
         all.irq.join(" || ")
     };
-    let Parts { ports, body, reads, .. } = all;
+    let Parts {
+        fields, body, reads, ..
+    } = all;
+    let ports = ports_name(b);
+    let decl: String = fields.iter().map(|(n, t, _)| format!("    {n}: {t},\n")).collect();
+    let values: Vec<&str> = fields.iter().map(|(_, _, v)| v.as_str()).collect();
     Ok(format!(
-        r#"pub entity {entity}(
-    clk: clock,
-    rst: bool,
-    axi: facet_hdl::AxiIn,
-    axi_out: inv facet_hdl::AxiOut,
+        r#"/// What `{entity}` gives the fabric: the bus's answer, the interrupt for
+/// the HPS, and one field per port.
+pub struct {ports} {{
+    axi_out: facet_hdl::AxiOut,
     // Level-sensitive: high while any fabric -> host queue holds an entry.
-    irq: inv bool,
-{ports}) {{
+    irq: bool,
+{decl}}}
+
+pub entity {entity}(clk: clock, rst: bool, axi: facet_hdl::AxiIn) -> {ports} {{
     decl rdata;
     let bus = inst facet_hdl::axi4_slave(clk, rst, axi, rdata);
-    set axi_out = bus.out;
     let (wr, wr_word, wr_data) = match bus.write {{
         Some(w) => (true, w.word, w.data),
         None => (false, 0, 0),
@@ -130,10 +136,16 @@ pub fn generate(b: &Boundary) -> Result<String, NameError> {
     let rdata: uint<32> = match rd_word {{
 {reads}        _ => 0,
     }};
-    set irq = {irq};
+    {ports}(bus.out, {irq}, {values})
 }}
-"#
+"#,
+        values = values.join(", "),
     ))
+}
+
+/// `Hello` -> `HelloPorts`, the struct `<boundary>_regs` returns.
+pub fn ports_name(b: &Boundary) -> String {
+    format!("{}Ports", b.name)
 }
 
 fn register(p: &PortDecl, scope: &mut Scope) -> Result<Parts, NameError> {
@@ -150,11 +162,6 @@ fn register(p: &PortDecl, scope: &mut Scope) -> Result<Parts, NameError> {
             let reg = scope.claim(format!("{n}_reg"), &origin)?;
             let strobe = scope.claim(format!("{n}_strobe"), &origin)?;
             let commit = scope.claim(format!("{n}_commit"), &origin)?;
-            writeln!(
-                out.ports,
-                "    // Host -> fabric, words {first}..={last}\n    {n}: inv {ty},\n    {written}: inv bool,"
-            )
-            .unwrap();
             let mut words = Vec::new();
             for i in 0..k - 1 {
                 let s = scope.claim(format!("{n}_s{i}"), &origin)?;
@@ -169,11 +176,13 @@ fn register(p: &PortDecl, scope: &mut Scope) -> Result<Parts, NameError> {
             words.push("wr_data".into());
             writeln!(
                 out.body,
-                "    let {commit} = wr && wr_word == {last};\n    reg(clk) {reg}: uint<{w}> reset(rst: 0) initial(0) = if {commit} {{ {} }} else {{ {reg} }};\n    reg(clk) {strobe}: bool reset(rst: false) initial(false) = {commit};\n    set {n} = {};\n    set {written} = {strobe};",
+                "    let {commit} = wr && wr_word == {last};\n    reg(clk) {reg}: uint<{w}> reset(rst: 0) initial(0) = if {commit} {{ {} }} else {{ {reg} }};\n    reg(clk) {strobe}: bool reset(rst: false) initial(false) = {commit};",
                 assemble(&words, w),
-                unpack(&reg, &p.ty)
             )
             .unwrap();
+            // Words {first}..={last}.
+            out.fields.push((n.clone(), ty.clone(), unpack(&reg, &p.ty)));
+            out.fields.push((written, "bool".into(), strobe));
             for i in 0..k {
                 writeln!(
                     out.reads,
@@ -187,15 +196,12 @@ fn register(p: &PortDecl, scope: &mut Scope) -> Result<Parts, NameError> {
         }
         Direction::FromFabric => {
             let packed = scope.claim(format!("{n}_packed"), &origin)?;
-            writeln!(
-                out.ports,
-                "    // Fabric -> host, words {first}..={last}\n    {n}: {ty},"
-            )
-            .unwrap();
+            let input = scope.claim(format!("{n}_in"), &origin)?;
+            out.fields.push((n.clone(), format!("inv {ty}"), format!("{input}.1")));
             writeln!(
                 out.body,
-                "    let {packed}: uint<{span}> = {};",
-                widen(&pack(&n, &p.ty), w, span)
+                "    let {input} = port();\n    let {packed}: uint<{span}> = {};",
+                widen(&pack(&format!("{input}.0"), &p.ty), w, span)
             )
             .unwrap();
             writeln!(out.reads, "        {first} => {},", word_of(&packed, span, 0)).unwrap();
@@ -253,17 +259,14 @@ fn queue_port(p: &PortDecl, depth: u32, scope: &mut Scope) -> Result<Parts, Name
 
     match p.direction {
         Direction::ToFabric => {
-            let data_port = if w > 0 {
-                format!("    {n}: inv {ty},\n")
-            } else {
-                String::new()
-            };
-            writeln!(
-                out.ports,
-                "    // Host -> fabric queue of {depth}, words {}..={last}; consumed when valid and ready\n{data_port}    {valid}: inv bool,\n    {ready}: bool,",
-                p.word
-            )
-            .unwrap();
+            let ack = scope.claim(format!("{n}_ack"), &origin)?;
+            writeln!(out.body, "    let {ack} = port();\n    let {ready} = {ack}.0;").unwrap();
+            let value = if w == 0 { "()".to_owned() } else { unpack(&entry, &p.ty) };
+            out.fields.push((
+                n.clone(),
+                format!("facet_hdl::Read<{ty}>"),
+                format!("facet_hdl::Read(if {head} != {tail} {{ Some({value}) }} else {{ None }}, {ack}.1)"),
+            ));
             if w == 0 {
                 // Only the next count is a push, so a retried write can't add a second.
                 writeln!(
@@ -290,39 +293,44 @@ fn queue_port(p: &PortDecl, depth: u32, scope: &mut Scope) -> Result<Parts, Name
                 memory(&mut out, &assemble(&words, w));
                 writeln!(
                     out.body,
-                    "    let {entry}: uint<{w}> = {rdp}.read_comb(Some(trunc({tail}))).unwrap_or(0);\n    set {n} = {};",
-                    unpack(&entry, &p.ty)
+                    "    let {entry}: uint<{w}> = {rdp}.read_comb(Some(trunc({tail}))).unwrap_or(0);"
                 )
                 .unwrap();
             }
             writeln!(
                 out.body,
-                "    set {valid} = {head} != {tail};\n    let {pop} = {head} != {tail} && {ready};\n    reg(clk) {head}: uint<32> reset(rst: 0) initial(0) = if {push} {{ {head}.wrapping_add(1) }} else {{ {head} }};\n    reg(clk) {tail}: uint<32> reset(rst: 0) initial(0) = if {pop} {{ {tail}.wrapping_add(1) }} else {{ {tail} }};"
+                "    let {pop} = {head} != {tail} && {ready};\n    reg(clk) {head}: uint<32> reset(rst: 0) initial(0) = if {push} {{ {head}.wrapping_add(1) }} else {{ {head} }};\n    reg(clk) {tail}: uint<32> reset(rst: 0) initial(0) = if {pop} {{ {tail}.wrapping_add(1) }} else {{ {tail} }};"
             )
             .unwrap();
         }
         Direction::FromFabric => {
-            let data_port = if w > 0 {
-                format!("    {n}: {ty},\n")
-            } else {
-                String::new()
-            };
+            let write = scope.claim(format!("{n}_write"), &origin)?;
             writeln!(
-                out.ports,
-                "    // Fabric -> host queue of {depth}, words {}..={last}; pushed when valid and ready\n{data_port}    {valid}: bool,\n    {ready}: inv bool,",
-                p.word
+                out.body,
+                "    let {write} = port();\n    let {valid} = match {write}.0 {{ Some(_) => true, None => false }};"
             )
             .unwrap();
             // Not ready in reset: the push would be ignored, and a producer
             // that isn't reset with us would count it as taken and lose it.
             writeln!(
                 out.body,
-                "    let {ready}_now = !rst && {room};\n    set {ready} = {ready}_now;\n    let {push} = {valid} && {ready}_now;\n    // Pop = write the new absolute tail. Anything that isn't a step forward\n    // within what's been produced is ignored, so a retried write can't\n    // consume a second entry.\n    let {pop} = wr && wr_word == {tail_w} && wr_data.wrapping_sub({tail}) <= {head}.wrapping_sub({tail});\n    reg(clk) {head}: uint<32> reset(rst: 0) initial(0) = if {push} {{ {head}.wrapping_add(1) }} else {{ {head} }};\n    reg(clk) {tail}: uint<32> reset(rst: 0) initial(0) = if {pop} {{ wr_data }} else {{ {tail} }};"
+                "    let {ready}_now = !rst && {room};\n    let {push} = {valid} && {ready}_now;\n    // Pop = write the new absolute tail. Anything that isn't a step forward\n    // within what's been produced is ignored, so a retried write can't\n    // consume a second entry.\n    let {pop} = wr && wr_word == {tail_w} && wr_data.wrapping_sub({tail}) <= {head}.wrapping_sub({tail});\n    reg(clk) {head}: uint<32> reset(rst: 0) initial(0) = if {push} {{ {head}.wrapping_add(1) }} else {{ {head} }};\n    reg(clk) {tail}: uint<32> reset(rst: 0) initial(0) = if {pop} {{ wr_data }} else {{ {tail} }};"
             )
             .unwrap();
             scope.claim(format!("{ready}_now"), &origin)?;
+            // Like std::mem::FifoWrite: a write while full is ignored, so the
+            // fabric keeps offering it until `full` drops.
+            out.fields.push((
+                n.clone(),
+                format!("facet_hdl::Write<{ty}>"),
+                format!("facet_hdl::Write({write}.1, !{ready}_now)"),
+            ));
             if w > 0 {
-                memory(&mut out, &pack(&n, &p.ty));
+                let x = scope.claim(format!("{n}_x"), &origin)?;
+                memory(
+                    &mut out,
+                    &format!("match {write}.0 {{ Some({x}) => {}, None => 0 }}", pack(&x, &p.ty)),
+                );
                 let span = e * 32;
                 writeln!(
                     out.body,

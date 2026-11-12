@@ -1,9 +1,9 @@
-//! Regenerates `hdl/generated/` from the declaration in `src/lib.rs`:
-//! `cargo run --features gen --bin blinky-gen`.
+//! Regenerates `hdl/generated/` from `src/lib.rs`:
+//! `cargo run --features gen --bin hello-gen`.
 
 fn main() {
     let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("hdl/generated");
-    let spade = facet_hdl_spade::Spade::of::<blinky::Blinky>().unwrap_or_else(|e| {
+    let spade = facet_hdl_spade::Spade::of::<hello::hello::Hello>().unwrap_or_else(|e| {
         eprintln!("{e}");
         std::process::exit(1)
     });

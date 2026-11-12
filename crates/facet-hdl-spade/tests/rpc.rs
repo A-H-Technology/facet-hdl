@@ -93,43 +93,36 @@ entity calc_top(
     irq: inv bool,
 ) {{
 {FLAT_AXI_GLUE}
+    let p = inst calc_regs(clk, rst, axi);
+    set axi_out_inv = p.axi_out;
+    set irq = p.irq;
     decl add_sent, add_got, check_sent, check_got, bad, reported;
-    let (add_req_ready, add_req_ready_inv) = port();
-    let (add_resp, add_resp_inv) = port();
-    let (add_resp_valid, add_resp_valid_inv) = port();
-    let (check_req_ready, check_req_ready_inv) = port();
-    let (check_resp, check_resp_inv) = port();
-    let (check_resp_valid, check_resp_valid_inv) = port();
-    let (report_req_ready, report_req_ready_inv) = port();
 
-    let add_req_valid = add_sent < 64;
-    let add_resp_ready = add_got < 64;
-    let check_req_valid = check_sent < 16;
-    let check_resp_ready = check_got < 16;
-    let report_req_valid = add_got == 64 && check_got == 16 && !reported;
-    let add_answered = add_resp_valid && add_resp_ready;
-    let check_answered = check_resp_valid && check_resp_ready;
+    // Call as fast as the queues take the calls.
+    set p.add_req.write = if add_sent < 64 {{ Some(add_args(add_sent)) }} else {{ None }};
+    set p.check_req.write = if check_sent < 16 {{ Some(CheckArgs(check_sent)) }} else {{ None }};
+    let add_sent_now = add_sent < 64 && !p.add_req.full;
+    let check_sent_now = check_sent < 16 && !p.check_req.full;
+    reg(clk) add_sent: uint<8> initial(0) = if add_sent_now {{ add_sent +. 1 }} else {{ add_sent }};
+    reg(clk) check_sent: uint<8> initial(0) = if check_sent_now {{ check_sent +. 1 }} else {{ check_sent }};
 
-    reg(clk) add_sent: uint<8> initial(0) = if add_req_valid && add_req_ready {{ trunc(add_sent + 1) }} else {{ add_sent }};
-    reg(clk) add_got: uint<8> initial(0) = if add_answered {{ trunc(add_got + 1) }} else {{ add_got }};
-    reg(clk) check_sent: uint<8> initial(0) = if check_req_valid && check_req_ready {{ trunc(check_sent + 1) }} else {{ check_sent }};
-    reg(clk) check_got: uint<8> initial(0) = if check_answered {{ trunc(check_got + 1) }} else {{ check_got }};
-    reg(clk) bad: uint<16> initial(0) = {{
-        let a: uint<16> = if add_answered && !add_right(add_resp, add_got) {{ 1 }} else {{ 0 }};
-        let c: uint<16> = if check_answered && !check_right(check_resp, check_got) {{ 1 }} else {{ 0 }};
-        bad.wrapping_add(a).wrapping_add(c)
-    }};
-    reg(clk) reported: bool initial(false) = reported || (report_req_valid && report_req_ready);
+    // Check every answer as it arrives.
+    set p.add_resp.ack = true;
+    set p.check_resp.ack = true;
+    let add_wrong = match p.add_resp.read {{ Some(r) => !add_right(r, add_got), None => false }};
+    let check_wrong = match p.check_resp.read {{ Some(r) => !check_right(r, check_got), None => false }};
+    let add_answered = match p.add_resp.read {{ Some(_) => true, None => false }};
+    let check_answered = match p.check_resp.read {{ Some(_) => true, None => false }};
+    reg(clk) add_got: uint<8> initial(0) = if add_answered {{ add_got +. 1 }} else {{ add_got }};
+    reg(clk) check_got: uint<8> initial(0) = if check_answered {{ check_got +. 1 }} else {{ check_got }};
+    reg(clk) bad: uint<16> initial(0) =
+        bad +. (if add_wrong {{ 1 }} else {{ 0 }}) +. (if check_wrong {{ 1 }} else {{ 0 }});
 
+    // Then tell Rust how it went.
+    let done = add_got == 64 && check_got == 16 && !reported;
     let checked: uint<16> = zext(add_got + check_got);
-    let _ = inst calc_regs(
-        clk, rst, axi, axi_out_inv, irq,
-        add_args(add_sent), add_req_valid, add_req_ready_inv,
-        add_resp_inv, add_resp_valid_inv, add_resp_ready,
-        CheckArgs(check_sent), check_req_valid, check_req_ready_inv,
-        check_resp_inv, check_resp_valid_inv, check_resp_ready,
-        ReportArgs(Report(checked, bad)), report_req_valid, report_req_ready_inv,
-    );
+    set p.report_req.write = if done {{ Some(ReportArgs(Report(checked, bad))) }} else {{ None }};
+    reg(clk) reported: bool initial(false) = reported || (done && !p.report_req.full);
 }}
 "#
     )

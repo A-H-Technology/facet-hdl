@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 pub use compile::{Source, compile};
 pub use literal::literal;
 pub use names::NameError;
-pub use regs::entity_name;
+pub use regs::{entity_name, ports_name};
 
 /// `facet_hdl.spade`: compiled as the module `facet_hdl`.
 pub const LIBRARY: &str = include_str!("../spade/facet_hdl.spade");

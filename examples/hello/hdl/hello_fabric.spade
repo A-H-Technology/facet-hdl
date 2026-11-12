@@ -1,0 +1,26 @@
+// The fabric half of hello: answers Rust's add_one, and calls Rust's
+// pressed() each time the button goes down.
+
+use hello::hello_regs;
+
+pub entity hello_fabric(
+    clk: clock,
+    rst: bool,
+    axi: facet_hdl::AxiIn,
+    button: bool,
+) -> (facet_hdl::AxiOut, bool) {
+    let p = inst hello_regs(clk, rst, axi);
+
+    // add_one: answered in the cycle Rust's call arrives.
+    set p.add_one_resp.write = match p.add_one_req.read {
+        Some(args) => Some(args.x +. 1),
+        None => None,
+    };
+    set p.add_one_req.ack = !p.add_one_resp.full;
+
+    // pressed: one call per press.
+    reg(clk) was_down: bool reset(rst: false) initial(false) = button;
+    set p.pressed_req.write = if button && !was_down { Some(()) } else { None };
+
+    (p.axi_out, p.irq)
+}
