@@ -1,0 +1,29 @@
+use facet_hdl::{AxiIn, AxiOut, Bus, BusWrite, axi4_slave};
+
+#[no_mangle(all)]
+entity mem_top(
+    clk: clock, rst: bool,
+    s_axi_awid: uint<4>, s_axi_awaddr: uint<32>, s_axi_awlen: uint<8>, s_axi_awvalid: bool, s_axi_awready: inv bool,
+    s_axi_wdata: uint<32>, s_axi_wvalid: bool, s_axi_wready: inv bool,
+    s_axi_bid: inv uint<4>, s_axi_bresp: inv uint<2>, s_axi_bvalid: inv bool, s_axi_bready: bool,
+    s_axi_arid: uint<4>, s_axi_araddr: uint<32>, s_axi_arlen: uint<8>, s_axi_arvalid: bool, s_axi_arready: inv bool,
+    s_axi_rid: inv uint<4>, s_axi_rdata: inv uint<32>, s_axi_rresp: inv uint<2>, s_axi_rlast: inv bool, s_axi_rvalid: inv bool, s_axi_rready: bool,
+) {
+    decl rdata;
+    let bus = inst axi4_slave(clk, rst, AxiIn(s_axi_awid, s_axi_awaddr, s_axi_awlen, s_axi_awvalid, s_axi_wdata, s_axi_wvalid, s_axi_bready, s_axi_arid, s_axi_araddr, s_axi_arlen, s_axi_arvalid, s_axi_rready), rdata);
+    memory: [uint<32>; 16] {
+        rd_port: std::mem::Ro<_, _, 0>,
+        wr_port: std::mem::Wo<_, _, 1>,
+    };
+    wr_port.write(clk, match bus.write {
+        Some(w) => Some((trunc(w.word), w.data)),
+        None => None,
+    });
+    let rd_addr = match bus.read { Some(word) => Some(trunc(word)), None => None };
+    let rdata = rd_port.read_comb(rd_addr).unwrap_or(0);
+    let o = bus.out;
+    set s_axi_awready = o.awready; set s_axi_wready = o.wready;
+    set s_axi_bid = o.bid; set s_axi_bresp = o.bresp; set s_axi_bvalid = o.bvalid;
+    set s_axi_arready = o.arready; set s_axi_rid = o.rid; set s_axi_rdata = o.rdata;
+    set s_axi_rresp = o.rresp; set s_axi_rlast = o.rlast; set s_axi_rvalid = o.rvalid;
+}

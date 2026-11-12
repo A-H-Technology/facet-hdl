@@ -1,0 +1,134 @@
+// facet-hdl's Spade library: the AXI4 slave in front of every generated
+// register file, and the types the generated code shares.
+//
+// AXI4 slave -> a word bus, for the generated register file.
+//
+// Shaped for the DE25-Nano's lightweight HPS-to-FPGA bridge as phase 1 sets
+// it up: full AXI4, 32-bit data, 4-bit IDs, bursts of up to 256 beats. Every
+// beat is one 32-bit word: AxSIZE and WSTRB are ignored (the host only does
+// aligned 32-bit accesses), and every burst counts up (INCR), whatever AxBURST
+// says. IDs are echoed. One transaction at a time; a waiting write goes
+// before a waiting read.
+//
+// The bus side: `write` carries one word written this cycle; `read` asks for
+// one word this cycle, and `rdata` must answer it combinationally in the same
+// cycle. Each beat raises `read` exactly once, so reads with side effects
+// (a snapshot, a queue entry) see each access exactly once.
+
+pub struct AxiIn {
+    awid: uint<4>,
+    awaddr: uint<32>,
+    awlen: uint<8>,
+    awvalid: bool,
+    wdata: uint<32>,
+    wvalid: bool,
+    bready: bool,
+    arid: uint<4>,
+    araddr: uint<32>,
+    arlen: uint<8>,
+    arvalid: bool,
+    rready: bool,
+}
+
+pub struct AxiOut {
+    awready: bool,
+    wready: bool,
+    bid: uint<4>,
+    bresp: uint<2>,
+    bvalid: bool,
+    arready: bool,
+    rid: uint<4>,
+    rdata: uint<32>,
+    rresp: uint<2>,
+    rlast: bool,
+    rvalid: bool,
+}
+
+pub struct BusWrite {
+    word: uint<30>,
+    data: uint<32>,
+}
+
+enum State {
+    Idle,
+    Write { id: uint<4>, word: uint<30>, left: uint<8> },
+    WriteResp { id: uint<4> },
+    Read { id: uint<4>, word: uint<30>, left: uint<8> },
+    ReadData { id: uint<4>, word: uint<30>, left: uint<8>, data: uint<32> },
+}
+
+pub struct Bus {
+    out: AxiOut,
+    write: Option<BusWrite>,
+    read: Option<uint<30>>,
+}
+
+fn word_of(addr: uint<32>) -> uint<30> {
+    trunc(addr >> 2)
+}
+
+pub entity axi4_slave(clk: clock, rst: bool, i: AxiIn, rdata: uint<32>) -> Bus {
+    reg(clk) state: State reset(rst: State::Idle) initial(State::Idle) = match state {
+        State::Idle => if i.awvalid {
+            State::Write(i.awid, word_of(i.awaddr), i.awlen)
+        } else if i.arvalid {
+            State::Read(i.arid, word_of(i.araddr), i.arlen)
+        } else {
+            State::Idle
+        },
+        State::Write(id, word, left) => if !i.wvalid {
+            state
+        } else if left == 0 {
+            State::WriteResp(id)
+        } else {
+            State::Write(id, trunc(word + 1), trunc(left - 1))
+        },
+        State::WriteResp(id) => if i.bready { State::Idle } else { state },
+        State::Read(id, word, left) => State::ReadData(id, word, left, rdata),
+        State::ReadData(id, word, left, data) => if !i.rready {
+            state
+        } else if left == 0 {
+            State::Idle
+        } else {
+            State::Read(id, trunc(word + 1), trunc(left - 1))
+        },
+    };
+
+    let idle = match state { State::Idle => true, _ => false };
+    let (bvalid, bid) = match state { State::WriteResp(id) => (true, id), _ => (false, 0) };
+    let (rvalid, rid, rlast, rdata_out) = match state {
+        State::ReadData(id, word, left, data) => (true, id, left == 0, data),
+        _ => (false, 0, false, 0),
+    };
+    let write = match state {
+        State::Write(id, word, left) => if i.wvalid { Some(BusWrite(word, i.wdata)) } else { None },
+        _ => None,
+    };
+    let read = match state {
+        State::Read(id, word, left) => Some(word),
+        _ => None,
+    };
+    Bus(
+        AxiOut(
+            idle && i.awvalid,
+            match state { State::Write(_, _, _) => true, _ => false },
+            bid,
+            0,
+            bvalid,
+            idle && !i.awvalid && i.arvalid,
+            rid,
+            rdata_out,
+            0,
+            rlast,
+            rvalid,
+        ),
+        write,
+        read,
+    )
+}
+
+// What the fabric gets back from a call into Rust (`facet_hdl::rpc::CallResult`).
+pub enum CallResult<T> {
+    Returned { value: T },
+    Panicked,
+}

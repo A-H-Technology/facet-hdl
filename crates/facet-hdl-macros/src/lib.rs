@@ -387,7 +387,7 @@ fn generate(boundary: &Ident, calls: &[Call]) -> TokenStream {
     quote! {
         #items
 
-        /// The boundary the calls go through: generate its VHDL from this
+        /// The boundary the calls go through: generate its Spade from this
         /// type, then `bind` it.
         #[derive(::facet::Facet)]
         pub struct #boundary { #ports }

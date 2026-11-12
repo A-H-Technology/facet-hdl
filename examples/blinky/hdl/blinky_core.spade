@@ -1,0 +1,72 @@
+// The hand-written half of the blinky fabric. Everything it exchanges with
+// the HPS arrives as the typed values generated from src/lib.rs.
+//
+// `ms_cycles` (clock cycles per millisecond) and `result_latency` are ports,
+// not constants, so a test can run one cycle per millisecond while a board
+// top ties them to its clock; synthesis folds the constants either way.
+// `result_latency` is extra cycles before `sum` reflects an `operands` write:
+// it stands in for a real multi-cycle computation, so tests can show why the
+// host has to wait on `sum.calls` instead of reading straight after writing.
+
+use blinky::{blinky_regs, LedStatus, Pattern, Sum};
+
+pub entity blinky_core(
+    clk: clock,
+    rst: bool,
+    axi: facet_hdl::AxiIn,
+    axi_out: inv facet_hdl::AxiOut,
+    led: inv uint<8>,
+    ms_cycles: uint<32>,
+    result_latency: uint<16>,
+) {
+    decl ms_div, ms_tick, uptime, step_ms, phase, chase, led_i, result, countdown, pending, value, calls;
+    let (leds, leds_inv) = port();
+    let (leds_written, leds_written_inv) = port();
+    let (operands, operands_inv) = port();
+    let (operands_written, operands_written_inv) = port();
+    let (irq, irq_inv) = port();
+    let _: bool = leds_written;
+    let _: bool = irq;
+
+    let _ = inst blinky_regs(
+        clk, rst, axi, axi_out, irq_inv,
+        leds_inv, leds_written_inv,
+        LedStatus(leds.pattern, led_i, uptime),
+        operands_inv, operands_written_inv,
+        Sum(value, calls),
+    );
+    set led = led_i;
+
+    let ms_wrap = ms_div.wrapping_add(1) >= ms_cycles;
+    reg(clk) ms_div: uint<32> reset(rst: 0) initial(0) = if ms_wrap { 0 } else { ms_div.wrapping_add(1) };
+    reg(clk) ms_tick: bool reset(rst: false) initial(false) = ms_wrap;
+    reg(clk) uptime: uint<64> reset(rst: 0) initial(0) = if ms_wrap { uptime.wrapping_add(1) } else { uptime };
+
+    let step_end = step_ms.wrapping_add(1) >= leds.period_ms;
+    reg(clk) step_ms: uint<16> reset(rst: 0) initial(0) =
+        if !ms_tick { step_ms } else if step_end { 0 } else { step_ms.wrapping_add(1) };
+    reg(clk) phase: bool reset(rst: false) initial(false) = if ms_tick && step_end { !phase } else { phase };
+    reg(clk) chase: uint<3> reset(rst: 0) initial(0) = if ms_tick && step_end { chase.wrapping_add(1) } else { chase };
+
+    let one: uint<8> = 1;
+    reg(clk) led_i: uint<8> reset(rst: 0) initial(0) = match leds.pattern {
+        Pattern::Off => 0,
+        Pattern::Solid => leds.mask,
+        Pattern::Blink => if phase { leds.mask } else { 0 },
+        Pattern::Chase => leds.mask & (one << zext(chase)),
+    };
+
+    let a: uint<64> = zext(operands.a);
+    let b: uint<64> = zext(operands.b);
+    let total = a.wrapping_add(b).as_int();
+    reg(clk) result: int<64> reset(rst: 0) initial(0) =
+        if operands_written { if operands.negate { total.wrapping_neg() } else { total } } else { result };
+    // value and calls move together, so a host that sees the new generation
+    // also sees its value.
+    let done = !operands_written && pending && countdown == 0;
+    reg(clk) countdown: uint<16> reset(rst: 0) initial(0) =
+        if operands_written { result_latency } else if pending && countdown != 0 { trunc(countdown - 1) } else { countdown };
+    reg(clk) pending: bool reset(rst: false) initial(false) = if operands_written { true } else if done { false } else { pending };
+    reg(clk) value: int<64> reset(rst: 0) initial(0) = if done { result } else { value };
+    reg(clk) calls: uint<16> reset(rst: 0) initial(0) = if done { calls.wrapping_add(1) } else { calls };
+}

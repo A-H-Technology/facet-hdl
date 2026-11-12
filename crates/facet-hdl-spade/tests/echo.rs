@@ -1,12 +1,12 @@
-//! Every encodable shape goes host -> VHDL record -> host unchanged. The
-//! fabric side is just a wire from the ToFabric record to the FromFabric one,
-//! so any disagreement between `facet_hdl::codec` and the generated VHDL
-//! pack/unpack functions shows up as a mismatch.
+//! Every encodable shape goes host -> Spade -> host unchanged, through the
+//! generated register file in iverilog. The fabric side is a wire from the
+//! ToFabric value to the FromFabric one, so any disagreement between
+//! `facet_hdl::codec` and the generated pack/unpack shows up as a mismatch.
 
 use facet::Facet;
 use facet_hdl::{FromFabric, ToFabric, bind};
-use facet_hdl_ghdl::Sim;
-use facet_hdl_vhdl::Vhdl;
+use facet_hdl_iverilog::Sim;
+use facet_hdl_spade::{FLAT_AXI_GLUE, FLAT_AXI_PORTS, Spade, literal};
 use std::path::Path;
 
 #[derive(Facet, Debug, Clone, Copy, PartialEq)]
@@ -55,42 +55,12 @@ pub struct Everything {
 pub struct Echo {
     pub input: ToFabric<Everything>,
     pub output: FromFabric<Everything>,
-    /// A constant on the fabric side, rendered from a Rust value: reading it
-    /// checks VHDL packing alone, independent of VHDL unpacking.
+    /// A constant on the fabric side, written as a Spade literal from a Rust
+    /// value: reading it checks Spade packing alone, not unpacking.
     pub golden: FromFabric<Everything>,
-    /// Fabric-side `input = golden`: checks VHDL unpacking alone.
+    /// `pack(input) == pack(golden)` on the fabric: unpacking has to agree.
     pub matches_golden: FromFabric<bool>,
 }
-
-const TOP: &str = r#"
-library ieee;
-use ieee.std_logic_1164.all;
-use work.facet_hdl_axil_pkg.all;
-use work.echo_pkg.all;
-use work.echo_golden_pkg.all;
-
-entity echo_top is
-  port (
-    clk, rst_n : in std_logic;
-    axi_in : in axil_m2s_t;
-    axi_out : out axil_s2m_t
-  );
-end entity;
-
-architecture rtl of echo_top is
-  signal v : everything_t;
-  signal m : std_logic;
-begin
-  m <= '1' when v = GOLDEN else '0';
-
-  regs : entity work.echo_regs
-    port map (
-      clk => clk, rst_n => rst_n, axi_in => axi_in, axi_out => axi_out,
-      input => v, input_written => open, output => v,
-      golden => GOLDEN, matches_golden => m
-    );
-end architecture;
-"#;
 
 /// xorshift64: deterministic, so a failure reproduces.
 struct Rng(u64);
@@ -147,26 +117,38 @@ impl Rng {
 const SEED: u64 = 0x9E37_79B9_7F4A_7C15;
 
 #[test]
-fn rust_and_vhdl_agree_on_every_bit() {
+fn rust_and_spade_agree_on_every_bit() {
     let golden = Rng(SEED ^ 0xFFFF).everything();
-    let work = Path::new(env!("CARGO_TARGET_TMPDIR")).join("echo-sim");
+    let spade = Spade::of::<Echo>().unwrap();
+    let top = format!(
+        r#"use echo::{{echo_regs, Cmd, Everything, Inner, Tri, pack_everything}};
+
+#[no_mangle(all)]
+entity echo_top(
+    clk: clock,
+    rst: bool,
+{FLAT_AXI_PORTS}
+    irq: inv bool,
+) {{
+{FLAT_AXI_GLUE}
+    let (input, input_inv) = port();
+    let (written, written_inv) = port();
+    let _: bool = written;
+    let golden: Everything = {golden};
+    let matches = pack_everything(input) == pack_everything(golden);
+    let _ = inst echo_regs(clk, rst, axi, axi_out_inv, irq, input_inv, written_inv, input, golden, matches);
+}}
+"#,
+        golden = literal(&golden).unwrap()
+    );
+    let work = Path::new(env!("CARGO_TARGET_TMPDIR")).join("spade-echo");
     std::fs::create_dir_all(&work).unwrap();
-    let golden_pkg = work.join("echo_golden_pkg.vhd");
-    std::fs::write(
-        &golden_pkg,
-        format!(
-            "use work.echo_pkg.all;\nlibrary ieee;\nuse ieee.std_logic_1164.all;\nuse ieee.numeric_std.all;\npackage echo_golden_pkg is\n  constant GOLDEN : everything_t := {};\nend package;\n",
-            facet_hdl_vhdl::literal(&golden).unwrap()
-        ),
-    )
-    .unwrap();
-    let top = work.join("echo_top.vhd");
-    std::fs::write(&top, TOP).unwrap();
-    let generated = Vhdl::of::<Echo>().unwrap().write_to(&work.join("gen")).unwrap();
+    std::fs::write(work.join("echo.spade"), &spade.code).unwrap();
+    std::fs::write(work.join("top.spade"), &top).unwrap();
+    let sv = spade.compile(&top).unwrap_or_else(|e| panic!("{e}"));
+    std::fs::write(work.join("spade.sv"), sv).unwrap();
     let sim = Sim::builder(&work, "echo_top")
-        .sources(generated)
-        .source(&golden_pkg)
-        .source(&top)
+        .source(work.join("spade.sv"))
         .build()
         .unwrap();
     let (transport, _clk) = sim.spawn().unwrap();
@@ -175,12 +157,12 @@ fn rust_and_vhdl_agree_on_every_bit() {
     assert_eq!(
         echo.golden.read().unwrap(),
         golden,
-        "VHDL to_slv disagrees with the Rust decoder"
+        "Spade pack disagrees with the Rust decoder"
     );
     echo.input.write(&golden).unwrap();
     assert!(
         echo.matches_golden.read().unwrap(),
-        "VHDL to_<type> disagrees with the Rust encoder"
+        "Spade unpack disagrees with the Rust encoder"
     );
 
     let mut rng = Rng(SEED);

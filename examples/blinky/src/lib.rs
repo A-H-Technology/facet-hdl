@@ -1,4 +1,4 @@
-//! The whole HPS<->fabric contract for the blinky demo. The VHDL in
+//! The whole HPS<->fabric contract for the blinky demo. The Spade in
 //! `hdl/generated/` and the host's handles both come from this file.
 
 use facet::Facet;

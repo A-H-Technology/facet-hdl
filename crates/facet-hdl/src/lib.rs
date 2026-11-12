@@ -21,7 +21,7 @@
 //! assert_eq!(layout.words(), 3);
 //! ```
 //!
-//! That one struct is both what the VHDL generator reads and, after
+//! That one struct is both what the Spade generator reads and, after
 //! [`bind`], the host's handle to the running fabric.
 
 mod boundary;

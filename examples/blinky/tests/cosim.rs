@@ -1,10 +1,10 @@
-//! The real host API against the real fabric VHDL, under GHDL.
+//! The real host API against the real fabric Spade, under Icarus Verilog.
 
 use blinky::*;
 use facet::Facet;
 use facet_hdl::{BindError, Boundary, HwType, ToFabric, Transport, bind, codec};
-use facet_hdl_ghdl::{Sim, SimClock, SimTransport};
-use facet_hdl_vhdl::Vhdl;
+use facet_hdl_iverilog::{Sim, SimClock, SimTransport};
+use facet_hdl_spade::{FLAT_AXI_GLUE, FLAT_AXI_PORTS, Source, Spade};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -15,15 +15,28 @@ fn hdl() -> PathBuf {
 
 fn build(name: &str, result_latency: u32) -> Sim {
     let work = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
-    let generated = Vhdl::of::<Blinky>().unwrap().write_to(&work.join("gen")).unwrap();
-    Sim::builder(&work, "blinky_core")
-        // One cycle per millisecond keeps "uptime" and "period" cheap to simulate.
-        .generic("CLK_HZ", "1000")
-        .generic("RESULT_LATENCY", &result_latency.to_string())
-        .sources(generated)
-        .source(hdl().join("blinky_core.vhd"))
+    std::fs::create_dir_all(&work).unwrap();
+    // One cycle per millisecond keeps "uptime" and "period" cheap to simulate.
+    let top = format!(
+        "#[no_mangle(all)]\nentity blinky_top(\n    clk: clock,\n    rst: bool,\n{FLAT_AXI_PORTS}\n    led: inv uint<8>,\n) {{\n{FLAT_AXI_GLUE}\n    let _ = inst blinky_core::blinky_core(clk, rst, axi, axi_out_inv, led, 1, {result_latency});\n}}\n"
+    );
+    let core = std::fs::read_to_string(hdl().join("blinky_core.spade")).unwrap();
+    let sv = Spade::of::<Blinky>()
+        .unwrap()
+        .compile_with(
+            &top,
+            &[Source {
+                module: &["blinky_core"],
+                name: "blinky_core.spade",
+                code: &core,
+            }],
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+    std::fs::write(work.join("spade.sv"), sv).unwrap();
+    Sim::builder(&work, "blinky_top")
+        .source(work.join("spade.sv"))
         .build()
-        .expect("GHDL build (run inside `nix develop`)")
+        .expect("iverilog build (run inside `nix develop`)")
 }
 
 /// Built once per test binary; each test spawns its own simulator process.
@@ -46,14 +59,14 @@ fn spawn() -> (Blinky, SimClock) {
 }
 
 #[test]
-fn checked_in_vhdl_matches_the_declaration() {
+fn checked_in_spade_matches_the_declaration() {
     let fresh = Path::new(env!("CARGO_TARGET_TMPDIR")).join("blinky-fresh");
-    for path in Vhdl::of::<Blinky>().unwrap().write_to(&fresh).unwrap() {
+    for path in Spade::of::<Blinky>().unwrap().write_to(&fresh).unwrap() {
         let name = path.file_name().unwrap();
         let checked_in = std::fs::read_to_string(hdl().join("generated").join(name)).unwrap_or_default();
         assert!(
             checked_in == std::fs::read_to_string(&path).unwrap(),
-            "hdl/generated/{} is stale; run `cargo run --bin blinky-gen`",
+            "hdl/generated/{} is stale; run `cargo run --features gen --bin blinky-gen`",
             name.display()
         );
     }

@@ -10,3 +10,8 @@ license = "EUPL-1.2"
 # Pinned to the rc because 0.50 is where facet's current docs and the local
 # checkout at /pool/dev/facet live; move to 0.50.0 once it's cut.
 facet = { version = "=0.50.0-rc.7", features = ["reflect"] }
+
+# The Spade compiler runs inside tests and generators; unoptimized it is slow
+# and recurses deep enough to need a huge stack.
+[profile.dev.package."*"]
+opt-level = 2

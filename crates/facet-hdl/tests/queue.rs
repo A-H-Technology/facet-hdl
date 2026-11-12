@@ -1,7 +1,7 @@
 //! Queue-end bookkeeping against plain memory. There's no fabric behind it,
 //! so the counters only move when a test moves them: that's what makes the
 //! protocol violations below reproducible. Real push/pop traffic is covered
-//! by the GHDL co-sim in facet-hdl-ghdl.
+//! by the co-sims in facet-hdl-spade.
 
 mod common;
 

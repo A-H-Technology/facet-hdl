@@ -1,12 +1,14 @@
-//! Co-simulation: GHDL runs the fabric design, and a generated testbench turns
-//! line commands on its stdin into AXI4-Lite transactions on the design's
-//! slave port. [`SimTransport`] speaks that protocol, so the host code under
-//! test is exactly the code that will run on the HPS.
+//! Co-simulation: Icarus Verilog runs the fabric design, and a generated
+//! testbench turns line commands on its stdin into AXI4 transactions on the
+//! design's slave port. [`SimTransport`] speaks that protocol, so the host code
+//! under test is exactly the code that will run on the HPS.
 //!
-//! The design under test must have the same interface the generated
-//! `<boundary>_regs` entity has: `clk`, `rst_n`, `axi_in : in axil_m2s_t` and
-//! `axi_out : out axil_s2m_t`. Any other outputs are left open, so a full top level
-//! with LEDs etc. works as-is; extra inputs need default values.
+//! The design under test has the flat AXI4 slave ports of the DE25-Nano's
+//! lightweight bridge as `s_axi_*` (4-bit IDs, 32-bit data, no size, burst,
+//! strobe or last signals: the generated register file ignores those), plus
+//! `clk`, an active-high `rst`, and optionally `irq`. Every transaction the
+//! testbench starts carries a new ID, and a response that doesn't echo it is
+//! reported as response 9.
 
 use facet_hdl::{Interrupt, Transport};
 use std::io::{self, BufRead, BufReader, Write};
@@ -26,29 +28,24 @@ pub struct SimBuilder {
     workdir: PathBuf,
     sources: Vec<PathBuf>,
     top: String,
-    generics: Vec<(String, String)>,
     irq: bool,
 }
 
 impl Sim {
-    /// `sources` in compile order; `top` is the entity the testbench drives.
+    /// `top` is the module the testbench drives.
     pub fn builder(workdir: impl Into<PathBuf>, top: &str) -> SimBuilder {
         SimBuilder {
             workdir: workdir.into(),
             sources: Vec::new(),
             top: top.into(),
-            generics: Vec::new(),
             irq: false,
         }
     }
 
     /// Starts the simulation and waits for reset to be released.
     pub fn spawn(&self) -> io::Result<(SimTransport, SimClock)> {
-        let mut child = Command::new("ghdl")
-            .args(["-r", "--std=08", &format!("--workdir={}", self.workdir.display()), TB])
-            // numeric_std warns about every undriven signal at time 0, before
-            // reset has had a chance to drive anything.
-            .arg("--ieee-asserts=disable-at-0")
+        let mut child = Command::new("vvp")
+            .args(["-n", "sim.vvp"])
             .current_dir(&self.workdir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -81,32 +78,25 @@ impl SimBuilder {
         self
     }
 
-    /// Extra generic for the top entity, as a VHDL expression.
-    pub fn generic(mut self, name: &str, value: &str) -> Self {
-        self.generics.push((name.into(), value.into()));
-        self
-    }
-
-    /// The top has an `irq : out std_logic` (normally the generated register
-    /// file's, passed straight up); the transport then offers it as an
+    /// The top has an `irq` output; the transport then offers it as an
     /// [`Interrupt`].
     pub fn irq(mut self) -> Self {
         self.irq = true;
         self
     }
 
-    /// Analyzes and elaborates everything into `workdir`.
+    /// Compiles everything into `workdir/sim.vvp`.
     pub fn build(self) -> io::Result<Sim> {
         std::fs::create_dir_all(&self.workdir)?;
-        let tb = self.workdir.join(format!("{TB}.vhd"));
-        std::fs::write(&tb, testbench(&self.top, &self.generics, self.irq))?;
-        let wd = format!("--workdir={}", self.workdir.display());
-        let mut analyze = Command::new("ghdl");
-        analyze.args(["-a", "--std=08", &wd]).args(&self.sources).arg(&tb);
-        run(analyze)?;
-        let mut elab = Command::new("ghdl");
-        elab.args(["-e", "--std=08", &wd, TB]).current_dir(&self.workdir);
-        run(elab)?;
+        let tb = self.workdir.join(format!("{TB}.sv"));
+        std::fs::write(&tb, testbench(&self.top, self.irq))?;
+        let mut cc = Command::new("iverilog");
+        cc.args(["-g2012", "-o"])
+            .arg(self.workdir.join("sim.vvp"))
+            .args(["-s", TB])
+            .arg(&tb)
+            .args(&self.sources);
+        run(cc)?;
         Ok(Sim {
             workdir: self.workdir,
             irq: self.irq,
@@ -133,8 +123,8 @@ struct Link {
     stdout: BufReader<ChildStdout>,
 }
 
-/// Marks the testbench's replies. GHDL prints assertion reports (and the
-/// design's own `report`s) on the same stdout, so anything unmarked is
+/// Marks the testbench's replies. The simulator prints warnings (and the
+/// design's own `$display`s) on the same stdout, so anything unmarked is
 /// passed through to stderr rather than parsed.
 const REPLY: &str = "@@ ";
 
@@ -156,7 +146,7 @@ impl Link {
             }
             match line.strip_prefix(REPLY) {
                 Some(reply) => return Ok(reply.trim().to_owned()),
-                None => eprint!("ghdl: {line}"),
+                None => eprint!("iverilog: {line}"),
             }
         }
     }
@@ -183,7 +173,7 @@ fn resp_err(resp: &str, what: String) -> io::Result<()> {
     match resp {
         "0" => Ok(()),
         r => Err(io::Error::other(format!(
-            "{what}: AXI response {r} (2=SLVERR, 3=DECERR)"
+            "{what}: AXI response {r} (2=SLVERR, 3=DECERR, 9=wrong ID echoed)"
         ))),
     }
 }
@@ -224,7 +214,8 @@ impl Transport for SimTransport {
             return Err(io::Error::other(format!("bad read reply {line:?}")));
         };
         resp_err(resp, format!("read word {word}"))?;
-        u32::from_str_radix(hex, 16).map_err(io::Error::other)
+        // `x`/`z` digits mean the design drove undefined bits.
+        u32::from_str_radix(hex, 16).map_err(|e| io::Error::other(format!("read word {word} gave {hex:?}: {e}")))
     }
 
     fn write(&mut self, word: u32, value: u32) -> io::Result<()> {
@@ -250,141 +241,42 @@ impl SimClock {
     }
 }
 
-fn testbench(top: &str, generics: &[(String, String)], irq: bool) -> String {
-    let irq_assoc = if irq { ", irq => irq" } else { "" };
-    // An empty `generic map ()` is a syntax error, so omit the clause entirely.
-    let generic_map = if generics.is_empty() {
-        String::new()
-    } else {
-        let assoc: Vec<_> = generics.iter().map(|(k, v)| format!("{k} => {v}")).collect();
-        format!("\n    generic map ({})", assoc.join(", "))
-    };
-    format!(
-        r#"-- Generated by facet-hdl-ghdl: stdin/stdout AXI4-Lite master for co-simulation.
---   (every reply starts with "@@ " so GHDL's own output can't be mistaken for one)
---   W <word> <hex32>  -> "B <resp>"
---   R <word>          -> "D <hex32> <resp>"
---   T <cycles>        -> "T"
---   I <cycles>        -> "I <0|1>": waits up to <cycles> for irq, then reports it
---   Q                 -> ends the simulation
-library ieee;
-use ieee.std_logic_1164.all;
-use ieee.numeric_std.all;
-use std.textio.all;
-use std.env.all;
-use work.facet_hdl_axil_pkg.all;
+impl SimTransport {
+    /// One AXI4 write burst of `data.len()` beats from `word` up (a test of
+    /// the slave itself; `Transport` only does single beats).
+    pub fn write_burst(&mut self, word: u32, data: &[u32]) -> io::Result<()> {
+        let mut cmd = format!("X {word} {}", data.len());
+        for d in data {
+            cmd.push_str(&format!(" {d:08X}"));
+        }
+        let line = self.link.lock().unwrap().send(&cmd)?;
+        match line.strip_prefix("B ") {
+            Some(resp) => resp_err(resp, format!("write burst at word {word}")),
+            None => Err(io::Error::other(format!("bad burst reply {line:?}"))),
+        }
+    }
 
-entity {TB} is
-end entity;
-
-architecture sim of {TB} is
-  signal clk   : std_logic := '0';
-  signal rst_n : std_logic := '0';
-  signal m : axil_m2s_t := axil_m2s_idle;
-  signal s : axil_s2m_t;
-  signal irq : std_logic := '0';
-begin
-  clk <= not clk after 5 ns;
-
-  dut : entity work.{top}{generic_map}
-    port map (clk => clk, rst_n => rst_n, axi_in => m, axi_out => s{irq_assoc});
-
-  driver : process
-    variable l : line;
-    variable o : line;
-    variable cmd : character;
-    variable word : natural;
-    variable n : natural;
-    variable data : std_logic_vector(31 downto 0);
-    variable aw_done, w_done : boolean;
-  begin
-    for i in 1 to 4 loop
-      wait until rising_edge(clk);
-    end loop;
-    rst_n <= '1';
-    wait until rising_edge(clk);
-    write(o, string'("@@ READY"));
-    writeline(output, o);
-    flush(output);
-
-    while not endfile(input) loop
-      readline(input, l);
-      next when l'length = 0;
-      read(l, cmd);
-      case cmd is
-        when 'W' =>
-          read(l, word);
-          hread(l, data);
-          m.awaddr <= std_logic_vector(to_unsigned(word * 4, 32));
-          m.wdata <= data;
-          m.awvalid <= '1';
-          m.wvalid <= '1';
-          m.bready <= '1';
-          aw_done := false;
-          w_done := false;
-          while not (aw_done and w_done) loop
-            wait until rising_edge(clk);
-            if m.awvalid = '1' and s.awready = '1' then
-              aw_done := true;
-              m.awvalid <= '0';
-            end if;
-            if m.wvalid = '1' and s.wready = '1' then
-              w_done := true;
-              m.wvalid <= '0';
-            end if;
-          end loop;
-          loop
-            wait until rising_edge(clk);
-            exit when s.bvalid = '1';
-          end loop;
-          m.bready <= '0';
-          write(o, string'("@@ B "));
-          write(o, to_integer(unsigned(s.bresp)));
-        when 'R' =>
-          read(l, word);
-          m.araddr <= std_logic_vector(to_unsigned(word * 4, 32));
-          m.arvalid <= '1';
-          m.rready <= '1';
-          loop
-            wait until rising_edge(clk);
-            exit when s.arready = '1';
-          end loop;
-          m.arvalid <= '0';
-          loop
-            wait until rising_edge(clk);
-            exit when s.rvalid = '1';
-          end loop;
-          m.rready <= '0';
-          write(o, string'("@@ D "));
-          hwrite(o, s.rdata);
-          write(o, string'(" "));
-          write(o, to_integer(unsigned(s.rresp)));
-        when 'T' =>
-          read(l, n);
-          for i in 1 to n loop
-            wait until rising_edge(clk);
-          end loop;
-          write(o, string'("@@ T"));
-        when 'I' =>
-          read(l, n);
-          for i in 1 to n loop
-            exit when irq = '1';
-            wait until rising_edge(clk);
-          end loop;
-          write(o, string'("@@ I "));
-          write(o, to_integer(unsigned'("" & irq)));
-        when others =>
-          finish;
-      end case;
-      writeline(output, o);
-      flush(output);
-    end loop;
-    finish;
-  end process;
-end architecture;
-"#
-    )
+    /// One AXI4 read burst of `n` beats from `word` up.
+    pub fn read_burst(&mut self, word: u32, n: usize) -> io::Result<Vec<u32>> {
+        let line = self.link.lock().unwrap().send(&format!("Y {word} {n}"))?;
+        let mut it = line.split_whitespace();
+        if it.next() != Some("Y") {
+            return Err(io::Error::other(format!("bad burst reply {line:?}")));
+        }
+        let words: Vec<&str> = it.collect();
+        let (resp, beats) = words
+            .split_last()
+            .ok_or_else(|| io::Error::other("empty burst reply"))?;
+        resp_err(resp, format!("read burst at word {word}"))?;
+        beats
+            .iter()
+            .map(|h| u32::from_str_radix(h, 16).map_err(io::Error::other))
+            .collect()
+    }
 }
+
+mod testbench;
+use testbench::testbench;
 
 /// The top's `irq`, sampled by letting the simulator run until it rises.
 /// Simulated time only advances while a wait is in progress, in bounded

@@ -26,13 +26,18 @@ SPSC channels: a ring of `N` entries that never drops or repeats one. The host
 gets `push(&T) -> Result<(), PushError>` / `pop() -> Option<T>` on `&mut self`,
 and the fabric gets a `<name>`, `<name>_valid`, `<name>_ready` handshake.
 
-- **VHDL** (`facet-hdl-vhdl`): a package with one VHDL type per Rust type
-  (records, enums, arrays) plus `to_slv`/`to_<type>` packing functions, and an
-  AXI4-Lite register file entity whose ports are those typed records. The bus
-  itself is two records from `facet_hdl_axil_pkg` (`axi_in : axil_m2s_t`,
-  `axi_out : axil_s2m_t`), so your logic carries it as two ports and passes it
-  straight through. Flat `s_axi_*` signals only appear at the Platform Designer
-  edge.
+- **Spade** (`facet-hdl-spade`): one Spade type per Rust type (structs,
+  enums, arrays, `Option`, `Result`), `pack_*`/`unpack_*` functions between
+  each type and its bits, and a `<boundary>_regs` entity whose ports are
+  those types. In front of it sits an AXI4 slave (`facet_hdl.spade`) shaped
+  for the DE25-Nano's lightweight bridge as its phase 1 sets it up: full
+  AXI4, 32-bit data, 4-bit IDs echoed, bursts. Your fabric logic is Spade
+  and instantiates the register file; the bus is two struct ports
+  (`facet_hdl::AxiIn`/`AxiOut`), and flat `s_axi_*` signals only appear on
+  the top level. The Spade compiler runs in-process (`Spade::compile`),
+  pinned to v0.21.0, so there's no swim step. Its output is SystemVerilog,
+  which chipsmith reads. (Instantiating the register file straight from VHDL
+  or Verilog isn't tried: its struct ports would follow Spade's own layout.)
 - **Host handles** (`facet-hdl`): `bind::<Blinky>(transport)` returns that same
   struct with live handles: `b.leds.write(&ctl)?`, `b.status.read()?`. There's
   no `read` on a `ToFabric` and no `write` on a `FromFabric`.
@@ -46,14 +51,14 @@ HPS-to-FPGA bridge, but the pieces are separate crates:
 | --- | --- |
 | `facet-hdl-macros` | `#[facet_hdl::rpc]` (re-exported from `facet-hdl`), parsed with unsynn |
 | `facet-hdl` | `ToFabric`/`FromFabric` registers, `ToFabricQueue`/`FromFabricQueue` channels, shape → `HwType`, bit codec, `Boundary` layout, `Transport`, `bind` |
-| `facet-hdl-vhdl` | VHDL-2008 package and AXI4-Lite register entity; `literal(&value)` renders a Rust value as a VHDL constant |
-| `facet-hdl-ghdl` | Co-simulation: GHDL runs the fabric, and a generated testbench turns stdin lines into AXI transactions. `SimTransport` makes the real host code drive it |
+| `facet-hdl-spade` | Spade generator, the AXI4 slave, the in-process compiler; `literal(&value)` renders a Rust value as a Spade constant |
+| `facet-hdl-iverilog` | Co-simulation: Icarus Verilog runs the compiled fabric, and a generated testbench turns stdin lines into AXI4 transactions, a new ID each. `SimTransport` makes the real host code drive it; `vvp sim.vvp +vcd=<file>` dumps waveforms |
 | `facet-hdl-linux` | Linux transports: `DevMem` (uncached `/dev/mem` mapping of the bridge, `AGILEX5_LWH2F = 0x2000_0000`, polls) and `Uio` (a `generic-uio` node: the mapping plus the `irq` line, so `pop_wait` sleeps) |
-| `examples/blinky` | Declaration, hand-written fabric logic (`hdl/blinky_core.vhd`), the generator bin, the HPS CLI, and co-sim tests |
+| `examples/blinky` | Declaration, hand-written fabric logic (`hdl/blinky_core.spade`), the generator bin, the HPS CLI, and co-sim tests |
 
 ```sh
-nix develop --command cargo test                  # incl. GHDL co-sim
-nix develop --command cargo run --bin blinky-gen  # regenerate examples/blinky/hdl/generated
+nix develop --command cargo test                                 # incl. the iverilog co-sims
+nix develop --command cargo run --features gen --bin blinky-gen  # regenerate examples/blinky/hdl/generated
 nix build .#blinky-hps                            # static aarch64-musl CLI for mercury
 ```
 
@@ -90,13 +95,14 @@ The macro adds an argument struct per fn (`AddArgs { a, b }`) and a boundary
 named after the module (`Calc`) with two queues per fn, `<fn>_req` and
 `<fn>_resp`:
 
-- **Export** `add`: the fabric pushes `add_args_t` onto `add_req` and pops a
-  `CallResult<T>` from `add_resp`, either `Returned(T)` or `Panicked`. In VHDL
-  that's `call_option_u32_t`, with `tag` and `returned`. The fns stay as
-  written, so Rust can still call them.
+- **Export** `add`: the fabric pushes an `AddArgs` onto `add_req` and pops a
+  `CallResult<T>` from `add_resp`, either `Returned(T)` or `Panicked`. In
+  Spade that's `facet_hdl::CallResult<Option<uint<32>>>`, so the fabric
+  matches on it like Rust would. The fns stay as written, so Rust can still
+  call them.
 - **Import** `scale`: the declaration becomes a method,
-  `calc.scale(x, timeout) -> Result<u32, PortError>`. The fabric pops
-  `scale_args_t` from `scale_req` and pushes a plain `u32` onto
+  `calc.scale(x, timeout) -> Result<u32, PortError>`. The fabric pops a
+  `ScaleArgs` from `scale_req` and pushes a plain `uint<32>` onto
   `scale_resp`, since HDL can't panic.
 - `oneway` drops `_resp`. An exported oneway fn's panic is only reported by
   the panic hook; an imported one's method returns once the call is queued.
@@ -122,7 +128,9 @@ import can't have a parameter called `timeout` (the method adds one).
 
 ## Wire format
 
-These are the rules `codec.rs` and the generated VHDL both implement.
+These are the rules `codec.rs` and the generated Spade both implement. The
+Spade side packs and unpacks explicitly, so the format doesn't depend on how
+Spade lays its own types out.
 
 - `bool` = 1 bit. `u8..u128`/`i8..i128` = their width, two's complement.
   A fieldless enum is its declaration index in `ceil(log2(n))` bits. Structs
@@ -135,16 +143,13 @@ These are the rules `codec.rs` and the generated VHDL both implement.
   decoder ignores them. A `()` payload takes no bits, so `Result<(), E>` is
   just the tag and `E`. A variant carries at most one field: wrap several in
   a struct. `None` is variant 0 and `Some` 1; `Ok` is 0 and `Err` 1.
-  In VHDL it's a record: `tag` (an enumeration) plus one field per variant
-  that has a payload, named after the variant (`some`, `ok`, `err`, `set`).
-  Every payload field is decoded from the same bits, so only the one `tag`
-  names means anything. `Option`/`Result` are named after their payloads:
-  `option_u16_t`, `result_inner_bool_t`.
+  In Spade it's the same enum: `Option`/`Result` are Spade's own, and a user
+  enum's payload variant is declared `Set { value: Config }`.
 - Rejected with an error that names the field path: `usize`, floats, `char`,
   strings, slices, variants with several fields, zero-sized things,
   recursive types.
-  Generated names that collide or are illegal in VHDL (`next`, `a__b`, a port
-  `status` next to a type `Status`, ...) are rejected too.
+  Names that are Spade keywords (`reg`, `port`, `set`, ...), or ports whose
+  generated internals would collide, are rejected too.
 - `()` can only be a whole queue entry, which has no entry words. The fabric
   sees `_valid`/`_ready` only. The host pops by writing the tail as usual,
   and pushes by writing the new absolute head to the head word. There's no
@@ -195,8 +200,8 @@ These are the rules `codec.rs` and the generated VHDL both implement.
   `FromFabricQueue` holds an entry. A consumer that finds its queue empty and
   then waits can't miss an entry that landed in between, because the line is
   already high when the wait starts. `FromFabricQueue::pop_wait(timeout)`
-  sleeps on it when the transport offers an `Interrupt` (`Uio`, and the GHDL
-  sim built with `.irq()`), and polls otherwise (`DevMem`).
+  sleeps on it when the transport offers an `Interrupt` (`Uio`, and the
+  iverilog sim built with `.irq()`), and polls otherwise (`DevMem`).
   - There is one line for the whole boundary. A waiter woken by another
     queue's entry re-checks its own queue and sleeps again. While that other
     entry sits unconsumed, though, the line stays high and the waiter
@@ -204,89 +209,91 @@ These are the rules `codec.rs` and the generated VHDL both implement.
   - Nothing signals "a `ToFabricQueue` has room again". A level "not full"
     line would be high nearly all the time, so a full push returns
     `PushError::Full` and the producer retries.
+- Every AXI access answers OKAY: unmapped words read 0 and ignore writes,
+  since an error response can take the kernel down. Each beat is one 32-bit
+  word; AxSIZE and WSTRB are ignored, and every burst counts up.
+- Generated registers start at their reset values (`initial`), as FPGA flops
+  power up, so fabric logic that isn't reset with the register file never
+  sees undefined state.
 
 ## Verified
 
-- The unit tests cover the codec, layout, naming and bind. There's an
-  in-memory fake fabric for fingerprint mismatch and bad discriminants.
-- GHDL co-sim of the blinky design runs the real host API end to end. It
-  checks bind/fingerprint, 3-word signed sums, LED patterns and snapshotted
-  64-bit uptime.
+Every co-sim runs the real host API against Spade compiled in-process and
+simulated by Icarus Verilog. Each was also checked by planting a bug and
+watching it fail.
+
+- The unit tests cover the codec, layout, macro expansion and its errors,
+  and bind. There's an in-memory fake fabric for fingerprint mismatch and
+  bad discriminants.
+- AXI4 slave on its own: single beats and 9- and 16-beat bursts, every
+  response's ID checked by the testbench. A slave that doesn't echo BID, or
+  whose bursts don't advance, fails.
 - Echo co-sim covers nested structs, arrays of structs/enums/bools, 2-D
   arrays, `u128`, `i8`/`i64`, and tagged types: `Option<u16>`,
   `Result<(), Tri>`, an array of a user enum with payloads of three widths,
-  and `Option<Result<Inner, bool>>`. A golden constant rendered from Rust checks
-  VHDL pack and unpack *separately*, so a symmetric bug can't hide behind the
-  loopback. A planted field-order bug does fail it.
-- Queue co-sim: a fabric pipeline (`jobs` → ×3 → `done`) runs 300 sequenced
-  jobs both ways at full rate. It's run once free-running and once with an
-  LFSR making the fabric stall, and checks for gaps, duplicates and corrupt
-  2- and 3-word entries. Backpressure has to actually happen during the run.
-  Another test pushes into a frozen consumer: the ninth push returns `Full`,
-  and the fabric's counters are unchanged afterwards. A planted bug (the
-  fabric consuming while not ready) fails all three tests.
+  and `Option<Result<Inner, bool>>`. A golden value written as a Spade
+  literal checks packing and unpacking *separately*, so a symmetric bug can't
+  hide behind the loopback. A planted field-order bug fails the packing
+  check, and a payload read one bit low fails the unpacking one.
+- Blinky co-sim (the Spade core): bind/fingerprint, 3-word signed sums, LED
+  patterns, snapshotted 64-bit uptime, a 200-cycle adder showing
+  write-then-read returning a stale value and `blinky::add` returning the
+  right one, a torn commit through an unowned second accessor, and the
+  checked-in `hdl/generated/` matching the declaration.
+- Queue co-sim: a Spade pipeline (`jobs` → ×3 → `done`) runs 300 sequenced
+  jobs both ways at full rate, once free-running and once with an LFSR
+  stalling it. It checks for gaps, duplicates and corrupt 2- and 3-word
+  entries, and backpressure has to actually happen. Another test pushes into
+  a frozen consumer: the ninth push returns `Full`, and the fabric's counters
+  are unchanged. A fabric→host ring planted to accept pushes when full fails
+  both rate tests as a `Desync`.
+- Interrupt: the line is low while the results queue is empty, high while a
+  result waits, stays high until it's popped, then goes low. `pop_wait`
+  wakes far inside its timeout and returns `None` once the timeout passes.
+  With `irq` planted stuck low, the line test fails and `pop_wait` only
+  wakes at its 30 s timeout.
 - Window ownership: a second `bind` is refused in-process and from another
-  process, and a holder killed with `kill -9` frees the window. A co-sim
-  produces a real torn commit through an unowned second accessor.
-- Latency: a co-sim with a 200-cycle adder shows write-then-read returning a
-  stale value, and `blinky::add` returning the right one.
-- Interrupt co-sim: the line is low while the results queue is empty, high
-  while a result waits, stays high until it's popped, then goes low again.
-  `pop_wait` wakes far inside its timeout and returns `None` once the timeout
-  passes. With `irq` planted stuck low, the line test fails and `pop_wait`
-  only wakes at its 30 s timeout.
+  process, and a holder killed with `kill -9` frees the window.
+- RPC co-sim: the fabric, in Spade, is the caller. It fires 64 `add` calls
+  back to back, 8 in flight, alongside 16 `check` calls, one of which panics
+  in Rust, checks every answer by matching on `CallResult`/`Option`/`Result`,
+  and reports its tally through a oneway call. Planting an off-by-one in
+  Rust's `add` makes it report 56 mismatches, the 56 calls that don't
+  overflow. Its counters have no reset on purpose: with the register file's
+  queues ready during reset, calls get lost and the test fails.
+- Import co-sim: Rust calls the Spade fabric's `scale` (also 8 in flight
+  through the raw queues), `ping` (no arguments, `()` answer), oneway
+  `set_led` read back through `led`, and answers the fabric's three calls to
+  the no-argument export `tick`. `slow` answers 2000 cycles late: `slow(1)`
+  times out, and `slow(2)` must still return 3. With the drain of owed
+  answers removed from `rpc::invoke`, it returns 2, `slow(1)`'s answer.
 - `Uio`'s register path against a faked `/sys/class/uio` and a plain file in
   place of `/dev/uioN`: lookup by name, the mapping, bounds, a node whose
   `reg` is smaller than the boundary, and the shared lock path. **Not
   verified:** `UioIrq` (unmask by writing 1, `poll`, read the count). That
   needs a real `uio_pdrv_genirq` device.
 
-- RPC co-sim: the fabric is the caller. It fires 64 `add` calls back to
-  back, 8 in flight, alongside 16 `check` calls, one of which panics in
-  Rust. It checks every answer tag by tag (`Some`/`None`, `Ok`/`Err`,
-  `Panicked`) and reports its tally through a oneway call. Planting an
-  off-by-one in Rust's `add` makes the fabric report 56 mismatches, the 56
-  calls that don't overflow.
-- Import co-sim: Rust calls the fabric's `scale` (also 8 in flight through
-  the raw queues), `ping` (no arguments, `()` answer), oneway `set_led` read
-  back through `led`, and answers the fabric's three calls to the
-  no-argument export `tick`. `slow` answers 2000 cycles late: `slow(1)`
-  times out, and `slow(2)` must still return 3. With the drain of owed
-  answers removed from `rpc::invoke`, it returns 2, `slow(1)`'s answer.
-- The RPC co-sim found a bug in the register file: a `FromFabricQueue`'s
-  `_ready` stayed high in reset, while the ring ignored pushes, so a
-  producer outside our reset lost entries. `_ready` is now low in reset, and
-  the RPC co-sim's fabric is deliberately not reset, so the bug can't come
-  back silently.
-
 ## Not yet: running on mercury
 
-Nothing has touched hardware. `blinky-hps` builds, but mercury was off the
-network when this was written. Before it can do anything there:
+Nothing has touched hardware. `blinky-hps` builds. chipsmith builds and loads
+DE25-Nano cores itself now, and mercury boots chipsmith's HPS-first phase 1
+from QSPI (chipsmith 98c0898), so what's left is the bridge:
 
-1. **Bitstream.** Agilex 5 needs Quartus Prime **Pro**, which chipsmith doesn't
-   drive yet; it does Lite and 13.0sp1. The design also needs a Platform
-   Designer system with the HPS, normally Terasic's DE25-Nano GHRD. Our
-   `blinky_core` goes onto the LWH2F bridge as an AXI4-Lite slave, plus pin
-   assignments for the LEDs.
-2. **Loading it.** QSPI currently holds the stock image. nixos-fpga's planned
-   `hardware.fpga` (fpga-manager + overlay) is the declarative route.
-3. **For `Uio` and its interrupt:** a device-tree node for the component with
-   `compatible = "generic-uio"`, `reg` covering the window, and the `irq`
-   wired to an FPGA-to-HPS interrupt as a level-high SPI. The kernel also
-   needs `uio_pdrv_genirq.of_id=generic-uio` on its command line. The module
-   is already `=m` in Terasic's kernel config. The SPI number depends on the
-   Platform Designer system, so none is assumed here. This belongs in
-   nixos-fpga's `hardware.fpga` overlay.
+1. **The bridge's fabric-side ports.** Phase 1 exports the lightweight
+   bridge as full AXI4 (32-bit data, 29-bit address, 4-bit IDs, bursts),
+   which is what `facet_hdl.spade`'s slave speaks. chipsmith/a5pnr don't map
+   those ~200 HPS signals as nodes yet; only `f2h_irq0` is.
+2. **Enabling the bridge after a load from Linux.** U-Boot's `bridge enable`
+   runs before the fabric exists, and the kernel has no Agilex bridge
+   driver; the ATF SMC `HPS_SET_BRIDGES` is the way in, likely a small
+   module in nixos-fpga.
+3. **For `Uio` and its interrupt:** a device-tree node with
+   `compatible = "generic-uio"`, `reg` covering the window, and `irq` wired
+   to an FPGA-to-HPS interrupt as a level-high SPI (`f2h_irq0` already works
+   on the board), plus `uio_pdrv_genirq.of_id=generic-uio` on the kernel
+   command line. This belongs in nixos-fpga.
 4. **Then:** `blinky --uio <node name> status`, or `blinky --base
-   0x2000_0000+<component offset> status` without the node. Don't point
-   `--base` at an offset nothing decodes. A DECERR on arm64 can arrive as an
-   SError and panic the kernel.
-
-Candidates for single-sourcing next: the Platform Designer `_hw.tcl` for the
-register entity, and that device-tree node. Address span, interface and
-interrupt come straight from `Boundary` for both. Reset values could come from
-`Default`.
+   0x2000_0000+<component offset> status` without the node.
 
 ## Licence
 

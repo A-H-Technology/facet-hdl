@@ -1,7 +1,7 @@
 //! Values <-> the bit vector the fabric sees, driven by [`HwType`].
 //!
 //! Bit 0 of the vector is bit 0 of word 0; the vector is zero-padded up to a
-//! whole number of 32-bit words. The VHDL generator emits the mirror image of
+//! whole number of 32-bit words. The Spade generator emits the mirror image of
 //! exactly these rules, so this file is half of the wire format's definition.
 
 use crate::hw::{HwType, TaggedOrigin};

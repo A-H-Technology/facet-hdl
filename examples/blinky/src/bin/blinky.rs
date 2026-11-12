@@ -1,4 +1,4 @@
-//! Host side of the demo, for the HPS. Same `Blinky` struct the VHDL was
+//! Host side of the demo, for the HPS. Same `Blinky` struct the Spade was
 //! generated from; `bind` refuses to run against a bitstream that wasn't.
 //!
 //!   blinky [--base 0x20000000 | --uio NAME] status

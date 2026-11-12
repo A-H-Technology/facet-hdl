@@ -4,8 +4,8 @@
 
 use facet::Facet;
 use facet_hdl::{Boundary, FromFabricQueue, PushError, ToFabric, ToFabricQueue, Transport, bind, queue};
-use facet_hdl_ghdl::{Sim, SimTransport};
-use facet_hdl_vhdl::Vhdl;
+use facet_hdl_iverilog::{Sim, SimTransport};
+use facet_hdl_spade::{FLAT_AXI_GLUE, FLAT_AXI_PORTS, Spade};
 use std::path::Path;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
@@ -40,65 +40,57 @@ pub struct Pipe {
     pub stall: ToFabric<u32>,
 }
 
-const TOP: &str = r#"
-library ieee;
-use ieee.std_logic_1164.all;
-use ieee.numeric_std.all;
-use work.facet_hdl_axil_pkg.all;
-use work.pipe_pkg.all;
+/// The fabric: `done = jobs` with `y = 3 * x`, one in and one out on the same
+/// cycle, and only on cycles where `lfsr & stall == 0`.
+fn top() -> String {
+    format!(
+        r#"use pipe::{{pipe_regs, Done}};
 
-entity pipe_top is
-  port (
-    clk, rst_n : in std_logic;
-    axi_in : in axil_m2s_t;
-    axi_out : out axil_s2m_t;
-    irq : out std_logic
-  );
-end entity;
+#[no_mangle(all)]
+entity pipe_top(
+    clk: clock,
+    rst: bool,
+{FLAT_AXI_PORTS}
+    irq: inv bool,
+) {{
+{FLAT_AXI_GLUE}
+    let (job, job_inv) = port();
+    let (job_valid, job_valid_inv) = port();
+    let (done_ready, done_ready_inv) = port();
+    let (stall, stall_inv) = port();
+    let (stall_written, stall_written_inv) = port();
+    let _: bool = stall_written;
 
-architecture rtl of pipe_top is
-  signal job : job_t;
-  signal job_valid, job_ready, done_valid, done_ready, go : std_logic;
-  signal stall : unsigned(31 downto 0);
-  signal lfsr : unsigned(31 downto 0) := x"ACE1ACE1";
-  signal x64 : unsigned(63 downto 0);
-begin
-  regs : entity work.pipe_regs
-    port map (
-      clk => clk, rst_n => rst_n, axi_in => axi_in, axi_out => axi_out, irq => irq,
-      jobs => job, jobs_valid => job_valid, jobs_ready => job_ready,
-      done => (seq => job.seq, y => shift_left(x64, 1) + x64),
-      done_valid => done_valid, done_ready => done_ready,
-      stall => stall, stall_written => open
+    reg(clk) lfsr: uint<32> reset(rst: 0xACE1ACE1) = {{
+        let feedback: uint<32> = ((lfsr >> 31) ^ (lfsr >> 21) ^ (lfsr >> 1) ^ lfsr) & 1;
+        (lfsr << 1) | feedback
+    }};
+    let go = (lfsr & stall) == 0;
+    let x: uint<64> = zext(job.x);
+    let y: uint<64> = trunc(x + (x << 1));
+    let _ = inst pipe_regs(
+        clk, rst, axi, axi_out_inv, irq,
+        job_inv, job_valid_inv, done_ready && go,
+        Done(job.seq, y), job_valid && go, done_ready_inv,
+        stall_inv, stall_written_inv,
     );
-
-  x64 <= resize(job.x, 64);
-  go <= '1' when (lfsr and stall) = 0 else '0';
-  -- One job in, one result out, in the same cycle: the job is only taken
-  -- when its result has somewhere to go.
-  done_valid <= job_valid and go;
-  job_ready <= done_ready and go;
-
-  process (clk)
-  begin
-    if rising_edge(clk) then
-      lfsr <= lfsr(30 downto 0) & (lfsr(31) xor lfsr(21) xor lfsr(1) xor lfsr(0));
-    end if;
-  end process;
-end architecture;
-"#;
+}}
+"#
+    )
+}
 
 fn sim() -> &'static Sim {
     static SIM: OnceLock<Sim> = OnceLock::new();
     SIM.get_or_init(|| {
         let work = Path::new(env!("CARGO_TARGET_TMPDIR")).join("pipe-sim");
         std::fs::create_dir_all(&work).unwrap();
-        let top = work.join("pipe_top.vhd");
-        std::fs::write(&top, TOP).unwrap();
-        let generated = Vhdl::of::<Pipe>().unwrap().write_to(&work.join("gen")).unwrap();
+        let sv = Spade::of::<Pipe>()
+            .unwrap()
+            .compile(&top())
+            .unwrap_or_else(|e| panic!("{e}"));
+        std::fs::write(work.join("spade.sv"), sv).unwrap();
         Sim::builder(&work, "pipe_top")
-            .sources(generated)
-            .source(&top)
+            .source(work.join("spade.sv"))
             .irq()
             .build()
             .unwrap()

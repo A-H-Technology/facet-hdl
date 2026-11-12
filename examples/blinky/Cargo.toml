@@ -8,8 +8,18 @@ publish = false
 [dependencies]
 facet.workspace = true
 facet-hdl = { path = "../../crates/facet-hdl" }
-facet-hdl-vhdl = { path = "../../crates/facet-hdl-vhdl" }
 facet-hdl-linux = { path = "../../crates/facet-hdl-linux" }
+# Only the generator needs it, and the HPS binary mustn't cross-compile the
+# whole Spade compiler.
+facet-hdl-spade = { path = "../../crates/facet-hdl-spade", optional = true }
+
+[features]
+gen = ["dep:facet-hdl-spade"]
+
+[[bin]]
+name = "blinky-gen"
+required-features = ["gen"]
 
 [dev-dependencies]
-facet-hdl-ghdl = { path = "../../crates/facet-hdl-ghdl" }
+facet-hdl-spade = { path = "../../crates/facet-hdl-spade" }
+facet-hdl-iverilog = { path = "../../crates/facet-hdl-iverilog" }

@@ -34,7 +34,13 @@
         pname = "blinky";
         version = "0.1.0";
         src = ./.;
-        cargoDeps = platform.importCargoLock { lockFile = ./Cargo.lock; };
+        cargoDeps = platform.importCargoLock {
+          lockFile = ./Cargo.lock;
+          # Spade's compiler is a git dependency (not on crates.io past 0.16);
+          # Cargo.lock already pins its commit, so fetch by that instead of
+          # keeping a second hash in step with every bump.
+          allowBuiltinFetchGit = true;
+        };
         nativeBuildInputs = [ toolchain platform.cargoSetupHook ];
         buildPhase = ''
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld \
@@ -46,7 +52,7 @@
       };
 
       devShells.${system}.default = pkgs.mkShell {
-        packages = [ toolchain pkgs.rust-analyzer pkgs.ghdl ];
+        packages = [ toolchain pkgs.rust-analyzer pkgs.iverilog ];
       };
     };
 }
