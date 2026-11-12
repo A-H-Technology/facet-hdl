@@ -38,6 +38,7 @@ pub fn decode<T: Facet<'static>>(words: &[u32], ty: &HwType) -> Result<T, Decode
 fn encode_peek(peek: Peek<'_, 'static>, ty: &HwType, w: &mut BitWriter) {
     const BUG: &str = "HwType out of sync with the shape it was resolved from";
     match ty {
+        HwType::Unit => {}
         HwType::Bool => w.push(*peek.get::<bool>().expect(BUG) as u128, 1),
         HwType::Int { bits, signed } => {
             let raw: u128 = match (bits, signed) {
@@ -99,6 +100,7 @@ fn encode_peek(peek: Peek<'_, 'static>, ty: &HwType, w: &mut BitWriter) {
 
 fn decode_into(p: Partial<'static>, ty: &HwType, r: &mut BitReader<'_>) -> Result<Partial<'static>, DecodeError> {
     Ok(match ty {
+        HwType::Unit => p.set(()).map_err(reflect)?,
         HwType::Bool => p.set(r.take(1) != 0).map_err(reflect)?,
         HwType::Int { bits, signed } => {
             let raw = r.take(*bits);

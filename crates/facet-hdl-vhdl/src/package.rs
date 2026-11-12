@@ -54,7 +54,7 @@ pub fn unpack(src: &str, lo: &str, hi: &str, ty: &HwType) -> String {
 /// [`Boundary::named_types`], so equal names mean equal types).
 fn declarations(b: &Boundary) -> Vec<&HwType> {
     fn walk<'a>(ty: &'a HwType, out: &mut Vec<&'a HwType>) {
-        if matches!(ty, HwType::Bool | HwType::Int { .. }) {
+        if matches!(ty, HwType::Bool | HwType::Int { .. } | HwType::Unit) {
             return;
         }
         ty.children().into_iter().for_each(|c| walk(c, out));
@@ -204,7 +204,7 @@ pub fn generate(b: &Boundary, ns: &mut Namespace) -> Result<String, NameError> {
                 )
                 .unwrap();
             }
-            HwType::Bool | HwType::Int { .. } => unreachable!("not declared"),
+            HwType::Bool | HwType::Int { .. } | HwType::Unit => unreachable!("not declared"),
         }
         writeln!(head, "  constant {width} : natural := {};", ty.width()).unwrap();
         writeln!(head, "  function to_slv(v : {mark}) return std_logic_vector;").unwrap();

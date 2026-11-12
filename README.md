@@ -57,9 +57,10 @@ nix develop --command cargo run --bin blinky-gen  # regenerate examples/blinky/h
 nix build .#blinky-hps                            # static aarch64-musl CLI for mercury
 ```
 
-## The fabric calls Rust
+## Calls: the fabric calls Rust, Rust calls the fabric
 
-Mark functions in a module, and the fabric gets a call port for each:
+Mark functions in a module. `#[export]` fns are Rust the fabric calls,
+`#[import]` fns are bodiless declarations of HDL that Rust calls:
 
 ```rust
 #[facet_hdl::rpc]
@@ -72,31 +73,52 @@ pub mod calc {
 
     #[export(oneway)]               // no answer at all; must return ()
     pub fn log(ev: Event) { /* ... */ }
+
+    #[import]                       // implemented in HDL
+    pub fn scale(x: u16) -> u32;
+
+    #[import]                       // no arguments, () answer: just handshakes
+    pub fn flush();
 }
 
 let mut calc: calc::Calc = bind(transport)?;
-calc.serve()?;                      // or calc.poll() from your own loop
+let y = calc.scale(7, Duration::from_millis(10))?;   // Rust -> fabric
+calc.serve()?;                                       // fabric -> Rust, forever (or poll())
 ```
 
-The fns stay as written, so Rust can still call them. The macro adds an
-argument struct per fn (`AddArgs { a, b }`) and a boundary named after the
-module (`Calc`) with two queues per fn:
+The macro adds an argument struct per fn (`AddArgs { a, b }`) and a boundary
+named after the module (`Calc`) with two queues per fn, `<fn>_req` and
+`<fn>_resp`:
 
-- `add_req` (fabric → host): the fabric pushes `add_args_t` with
-  `add_req_valid`/`add_req_ready`.
-- `add_resp` (host → fabric): the answer, a `CallResult<T>`: `Returned(T)` or
-  `Panicked`. In VHDL that's `call_option_u32_t`, with `tag` and `returned`.
-  A `oneway` fn has no `_resp`.
+- **Export** `add`: the fabric pushes `add_args_t` onto `add_req` and pops a
+  `CallResult<T>` from `add_resp`, either `Returned(T)` or `Panicked`. In VHDL
+  that's `call_option_u32_t`, with `tag` and `returned`. The fns stay as
+  written, so Rust can still call them.
+- **Import** `scale`: the declaration becomes a method,
+  `calc.scale(x, timeout) -> Result<u32, PortError>`. The fabric pops
+  `scale_args_t` from `scale_req` and pushes a plain `u32` onto
+  `scale_resp`, since HDL can't panic.
+- `oneway` drops `_resp`. An exported oneway fn's panic is only reported by
+  the panic hook; an imported one's method returns once the call is queued.
+- A fn with no arguments, or an answer of `()`, is a queue of `()`: no data
+  port, only `_valid`/`_ready`. The handshake is the message.
 
-The rings are FIFO, so answers come back in call order and the fabric can
-issue up to `depth` calls before the first answer. `serve` sleeps on the
-irq line between calls. A panic is caught: a normal fn answers `Panicked`,
-and a oneway one is only reported by the panic hook. If the fabric stops
-draining a `_resp` queue, `serve` waits on it (there's no "room" interrupt)
-and stops answering other fns until it drains.
+The rings are FIFO, so answers come back in call order, and up to `depth`
+calls can be in flight. The queues are public fields, so you can also
+pipeline by hand (`calc.scale_req.push(..)`, then `calc.scale_resp.pop()`).
 
-Limits for now: every fn takes at least one argument (an empty struct has no
-bits to queue), no generics, no `self`, and parameters are `name: Type`.
+An import that times out may still be answered later. The next call to that
+fn first drains the answers still owed, worked out from the queues' own
+counts as calls sent minus answers taken, so a late answer is never
+returned as the wrong call's.
+
+`serve` sleeps on the irq line between calls. If the fabric stops draining an
+export's `_resp`, `serve` waits on it (there's no "room" interrupt) and stops
+answering other fns until it drains. The boundary is one `&mut` value, so
+serving exports and calling imports happen from the same thread, in turn.
+
+Limits for now: no generics, no `self`, parameters are `name: Type`, and an
+import can't have a parameter called `timeout` (the method adds one).
 
 ## Wire format
 
@@ -123,6 +145,11 @@ These are the rules `codec.rs` and the generated VHDL both implement.
   recursive types.
   Generated names that collide or are illegal in VHDL (`next`, `a__b`, a port
   `status` next to a type `Status`, ...) are rejected too.
+- `()` can only be a whole queue entry, which has no entry words. The fabric
+  sees `_valid`/`_ready` only. The host pops by writing the tail as usual,
+  and pushes by writing the new absolute head to the head word. There's no
+  entry word to commit on, and writing the absolute count, like a pop does,
+  makes a retried write harmless.
 - Each register port occupies `ceil(width/32)` consecutive 32-bit words, in
   field order, starting at word 1. A queue port occupies two counter words
   (`+0` tail, `+1` head) followed by one entry's worth of words.
@@ -220,7 +247,13 @@ These are the rules `codec.rs` and the generated VHDL both implement.
   `Panicked`) and reports its tally through a oneway call. Planting an
   off-by-one in Rust's `add` makes the fabric report 56 mismatches, the 56
   calls that don't overflow.
-- That test found a bug in the register file: a `FromFabricQueue`'s
+- Import co-sim: Rust calls the fabric's `scale` (also 8 in flight through
+  the raw queues), `ping` (no arguments, `()` answer), oneway `set_led` read
+  back through `led`, and answers the fabric's three calls to the
+  no-argument export `tick`. `slow` answers 2000 cycles late: `slow(1)`
+  times out, and `slow(2)` must still return 3. With the drain of owed
+  answers removed from `rpc::invoke`, it returns 2, `slow(1)`'s answer.
+- The RPC co-sim found a bug in the register file: a `FromFabricQueue`'s
   `_ready` stayed high in reset, while the ring ignored pushes, so a
   producer outside our reset lost entries. `_ready` is now low in reset, and
   the RPC co-sim's fabric is deliberately not reset, so the bug can't come

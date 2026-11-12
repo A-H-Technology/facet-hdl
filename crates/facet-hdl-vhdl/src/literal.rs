@@ -7,6 +7,13 @@ use facet_hdl::{HwType, LayoutError, codec};
 
 pub fn literal<T: Facet<'static>>(value: &T) -> Result<String, LayoutError> {
     let ty = HwType::of(T::SHAPE)?;
+    if matches!(ty, HwType::Unit) {
+        return Err(LayoutError::Unsupported {
+            path: String::new(),
+            ty: "()".into(),
+            why: "() has no bits, so there is no VHDL value to write".into(),
+        });
+    }
     let words = codec::encode(value, &ty);
     let mut cursor = 0;
     Ok(render(&ty, &words, &mut cursor))
@@ -25,6 +32,7 @@ fn render(ty: &HwType, words: &[u32], cursor: &mut u32) -> String {
         v
     };
     match ty {
+        HwType::Unit => unreachable!("() only appears as a whole queue entry"),
         HwType::Bool => if take(1) == 1 { "'1'" } else { "'0'" }.into(),
         HwType::Int { bits, signed } => {
             let digits = (*bits as usize).div_ceil(4);

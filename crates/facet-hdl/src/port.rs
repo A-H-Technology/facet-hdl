@@ -224,6 +224,11 @@ impl<T: Facet<'static>> FromFabric<T> {
 // second producer or consumer in this process is a borrow error, and #1's
 // window lock covers other processes.
 impl<T: Facet<'static>, const N: usize> ToFabricQueue<T, N> {
+    /// Entries this ring has ever taken (a free-running count).
+    pub fn pushed(&self) -> u32 {
+        self.head
+    }
+
     pub fn push(&mut self, value: &T) -> Result<(), PushError> {
         if self.head.wrapping_sub(self.tail) as usize >= N {
             let (head, tail) = self.port.queue_counters(N)?;
@@ -239,15 +244,31 @@ impl<T: Facet<'static>, const N: usize> ToFabricQueue<T, N> {
             }
         }
         let words = codec::encode(value, &self.port.ty);
-        self.port
-            .write_words(self.port.word + queue::ENTRY, &words)
-            .map_err(PortError::from)?;
-        self.head = self.head.wrapping_add(1);
+        let next = self.head.wrapping_add(1);
+        if words.is_empty() {
+            // A `()` entry has no last word to commit on, so the push is the
+            // new absolute head, idempotent like a pop's tail write.
+            self.port
+                .bus
+                .lock()
+                .write(self.port.word + queue::HEAD, next)
+                .map_err(PortError::from)?;
+        } else {
+            self.port
+                .write_words(self.port.word + queue::ENTRY, &words)
+                .map_err(PortError::from)?;
+        }
+        self.head = next;
         Ok(())
     }
 }
 
 impl<T: Facet<'static>, const N: usize> FromFabricQueue<T, N> {
+    /// Entries ever popped from this ring (a free-running count).
+    pub fn popped(&self) -> u32 {
+        self.tail
+    }
+
     /// The oldest entry, or `None` if the fabric hasn't produced one.
     pub fn pop(&mut self) -> Result<Option<T>, PortError> {
         if self.head == self.tail {

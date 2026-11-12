@@ -37,7 +37,9 @@ pub mod queue {
     /// value to pop (idempotent, so a retried write can't eat a second entry).
     pub const TAIL: u32 = 0;
     /// Producer's count; read-only to the host in both directions (for a
-    /// `ToFabricQueue` it advances when the entry's last word is written).
+    /// `ToFabricQueue` it advances when the entry's last word is written),
+    /// except a `ToFabricQueue<()>`: with no entry words to commit on, the
+    /// host pushes by writing the new absolute head here.
     pub const HEAD: u32 = 1;
     /// The entry window: for `ToFabricQueue` the slot being pushed, written in
     /// ascending order; for `FromFabricQueue` the oldest entry, snapshotted on
@@ -116,6 +118,9 @@ impl Boundary {
                 },
                 e => e,
             })?;
+            if matches!(ty, HwType::Unit) && kind == PortKind::Register {
+                return Err(LayoutError::UnitRegister(f.name));
+            }
             let words = match kind {
                 PortKind::Register => words_for(ty.width()),
                 PortKind::Queue { .. } => queue::ENTRY + words_for(ty.width()),

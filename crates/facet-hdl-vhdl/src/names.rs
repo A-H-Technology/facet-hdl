@@ -22,6 +22,7 @@ pub fn snake(name: &str) -> String {
 /// Type mark used wherever a value of `ty` is declared.
 pub fn type_mark(ty: &HwType) -> String {
     match ty {
+        HwType::Unit => unreachable!("a () queue has no data port, so nothing is declared with its type"),
         HwType::Bool => "std_logic".into(),
         HwType::Int { bits, signed } => {
             format!("{}({} downto 0)", if *signed { "signed" } else { "unsigned" }, bits - 1)
@@ -35,6 +36,7 @@ pub fn type_mark(ty: &HwType) -> String {
 /// The part of a declared type's name before `_t`; also names its width constant.
 pub fn type_stem(ty: &HwType) -> String {
     match ty {
+        HwType::Unit => "unit".into(),
         HwType::Bool => "bool".into(),
         HwType::Int { bits, signed } => format!("{}{bits}", if *signed { 'i' } else { 'u' }),
         HwType::Enum { shape, .. } | HwType::Struct { shape, .. } => snake(shape.type_identifier),

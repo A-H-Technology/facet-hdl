@@ -1,7 +1,8 @@
-//! `#[facet_hdl::rpc]`: turn `#[export]` fns in a module into a boundary the
-//! fabric calls them through.
+//! `#[facet_hdl::rpc]`: calls across the HPS<->fabric boundary, declared as
+//! Rust fns in a module. `#[export]` fns are Rust the fabric calls;
+//! `#[import]` fns are bodiless declarations of HDL that Rust calls.
 //!
-//! Only the export attributes and fn signatures are parsed. Everything else
+//! Only those attributes and the fn signatures are parsed. Everything else
 //! in the module is passed through untouched, which is why this needs
 //! unsynn's few building blocks and not a whole Rust grammar.
 
@@ -16,8 +17,8 @@ unsynn! {
     keyword KFn = "fn";
     keyword KMod = "mod";
     keyword KPub = "pub";
-    keyword KMut = "mut";
     keyword KExport = "export";
+    keyword KImport = "import";
     keyword KOneway = "oneway";
     keyword KDepth = "depth";
 
@@ -39,21 +40,25 @@ unsynn! {
         body: BraceGroup,
     }
 
-    enum ExportOpt {
+    enum Way {
+        Export(KExport),
+        Import(KImport),
+    }
+
+    enum CallOpt {
         Oneway(KOneway),
         Depth(Cons<KDepth, Assign, LiteralInteger>),
     }
 
-    struct ExportAttr {
+    struct CallAttr {
         pound: Pound,
-        body: BracketGroupContaining<Cons<KExport, Option<ParenthesisGroupContaining<CommaDelimitedVec<ExportOpt>>>>>,
+        body: BracketGroupContaining<Cons<Way, Option<ParenthesisGroupContaining<CommaDelimitedVec<CallOpt>>>>>,
     }
 
-    /// Everything of an exported fn up to its parameter list; the return
-    /// type and body are split off by hand (types contain `<..,..>`, which
-    /// aren't token groups).
+    /// A marked fn up to its parameter list; the return type and body are
+    /// split off by hand (types contain `<..,..>`, which aren't token groups).
     struct FnHead {
-        export: ExportAttr,
+        call: CallAttr,
         attrs: Vec<Attr>,
         vis: Option<Vis>,
         kw: KFn,
@@ -64,7 +69,16 @@ unsynn! {
 
 const DEFAULT_DEPTH: usize = 4;
 
-struct Export {
+#[derive(Clone, Copy, PartialEq)]
+enum Dir {
+    /// Rust fn, fabric calls it.
+    Export,
+    /// HDL, Rust calls it.
+    Import,
+}
+
+struct Call {
+    dir: Dir,
     name: Ident,
     params: Vec<(Ident, TokenStream)>,
     ret: Option<TokenStream>,
@@ -91,65 +105,91 @@ fn expand(attr: TokenStream, item: TokenStream) -> std::result::Result<TokenStre
         .map_err(|e| format!("#[facet_hdl::rpc] goes on an inline `mod name {{ .. }}`: {e}"))?;
 
     let mut kept = TokenStream::new();
-    let mut exports = Vec::new();
+    let mut calls = Vec::new();
     let mut it = module.body.0.stream().to_token_iter();
     loop {
         if let Ok(head) = FnHead::parse(&mut it) {
-            let (ret, body) = split_ret_and_body(&mut it)?;
-            let export = export_of(&head, ret.clone())?;
-            // The fn stays exactly as written, minus `#[export]`, so Rust can
-            // still call it directly.
-            let (attrs, vis, kw, name, params) = (&head.attrs, &head.vis, &head.kw, &head.name, &head.params);
-            let arrow = ret.as_ref().map(|r| quote! { -> #r });
-            kept.extend(quote! { #attrs #vis #kw #name #params #{arrow} #body });
-            exports.push(export);
+            let dir = match head.call.body.content.first {
+                Way::Export(_) => Dir::Export,
+                Way::Import(_) => Dir::Import,
+            };
+            let (ret, body) = split_ret_and_body(&mut it, &head.name, dir)?;
+            let call = call_of(&head, dir, ret.clone())?;
+            if let Some(body) = body {
+                // An export stays exactly as written, minus `#[export]`, so
+                // Rust can still call it directly. An import has no body; it
+                // becomes a method on the boundary instead.
+                let (attrs, vis, kw, name, params) = (&head.attrs, &head.vis, &head.kw, &head.name, &head.params);
+                let arrow = ret.as_ref().map(|r| quote! { -> #r });
+                kept.extend(quote! { #attrs #vis #kw #name #params #{arrow} #body });
+            }
+            calls.push(call);
         } else if let Ok(tt) = TokenTree::parse(&mut it) {
             kept.extend(Some(tt));
         } else {
             break;
         }
     }
-    if exports.is_empty() {
-        return Err("#[facet_hdl::rpc] module has no #[export] fns".into());
+    if calls.is_empty() {
+        return Err("#[facet_hdl::rpc] module has no #[export] or #[import] fns".into());
     }
 
     let boundary = Ident::new(&camel(&module.name.to_string()), module.name.span());
-    let generated = generate(&boundary, &exports);
+    let generated = generate(&boundary, &calls);
     let (attrs, vis, kw, name) = (&module.attrs, &module.vis, &module.kw, &module.name);
     Ok(quote! { #attrs #vis #kw #name { #kept #generated } })
 }
 
-/// After the parameter list: `-> Type` (optional) and then the body.
-fn split_ret_and_body(it: &mut TokenIter) -> std::result::Result<(Option<TokenStream>, Group), String> {
+/// After the parameter list: `-> Type` (optional), then a body for an export
+/// or `;` for an import.
+fn split_ret_and_body(
+    it: &mut TokenIter,
+    name: &Ident,
+    dir: Dir,
+) -> std::result::Result<(Option<TokenStream>, Option<Group>), String> {
     let mut ret = TokenStream::new();
     let mut seen_arrow = false;
     loop {
         let Ok(tt) = TokenTree::parse(it) else {
-            return Err("exported fn has no body".into());
+            return Err(match dir {
+                Dir::Export => format!("exported fn `{name}` has no body"),
+                Dir::Import => format!("imported fn `{name}` must end in `;`"),
+            });
         };
         match &tt {
             TokenTree::Group(g) if g.delimiter() == Delimiter::Brace => {
-                return Ok((seen_arrow.then_some(ret), g.clone()));
+                if dir == Dir::Import {
+                    return Err(format!(
+                        "imported fn `{name}` is implemented in HDL, so it has no body: end it with `;`"
+                    ));
+                }
+                return Ok((seen_arrow.then_some(ret), Some(g.clone())));
+            }
+            TokenTree::Punct(p) if p.as_char() == ';' => {
+                if dir == Dir::Export {
+                    return Err(format!("exported fn `{name}` needs a body"));
+                }
+                return Ok((seen_arrow.then_some(ret), None));
             }
             TokenTree::Ident(i) if i == "where" => {
-                return Err("exported fns can't be generic".into());
+                return Err(format!("`{name}` can't be generic"));
             }
             TokenTree::Punct(p) if !seen_arrow && p.as_char() == '-' => {}
             TokenTree::Punct(p) if !seen_arrow && p.as_char() == '>' => seen_arrow = true,
             _ if seen_arrow => ret.extend(Some(tt)),
-            _ => return Err(format!("unexpected `{tt}` after an exported fn's parameters")),
+            _ => return Err(format!("unexpected `{tt}` after `{name}`'s parameters")),
         }
     }
 }
 
-fn export_of(head: &FnHead, ret: Option<TokenStream>) -> std::result::Result<Export, String> {
+fn call_of(head: &FnHead, dir: Dir, ret: Option<TokenStream>) -> std::result::Result<Call, String> {
     let name = head.name.clone();
     let (mut oneway, mut depth) = (false, DEFAULT_DEPTH);
-    if let Some(opts) = &head.export.body.content.second {
+    if let Some(opts) = &head.call.body.content.second {
         for opt in opts.content.iter() {
             match &opt.value {
-                ExportOpt::Oneway(_) => oneway = true,
-                ExportOpt::Depth(d) => {
+                CallOpt::Oneway(_) => oneway = true,
+                CallOpt::Depth(d) => {
                     depth = d.third.value() as usize;
                     if !depth.is_power_of_two() || !(2..=65536).contains(&depth) {
                         return Err(format!("`{name}`: depth must be a power of two from 2 to 65536"));
@@ -165,13 +205,13 @@ fn export_of(head: &FnHead, ret: Option<TokenStream>) -> std::result::Result<Exp
         ));
     }
     let params = params_of(&name, head.params.0.stream())?;
-    if params.is_empty() {
-        // An empty args struct has no bits and can't be a queue entry.
+    if dir == Dir::Import && params.iter().any(|(p, _)| p == "timeout") {
         return Err(format!(
-            "`{name}` takes no arguments; fabric calls need at least one for now"
+            "`{name}`: the generated method adds a `timeout` parameter; rename yours"
         ));
     }
-    Ok(Export {
+    Ok(Call {
+        dir,
         name,
         params,
         ret,
@@ -230,66 +270,104 @@ fn params_of(fn_name: &Ident, ts: TokenStream) -> std::result::Result<Vec<(Ident
         .collect()
 }
 
-fn generate(boundary: &Ident, exports: &[Export]) -> TokenStream {
+fn generate(boundary: &Ident, calls: &[Call]) -> TokenStream {
     let mut items = TokenStream::new();
     let mut ports = TokenStream::new();
     let mut arms = TokenStream::new();
-    for e in exports {
-        let args = Ident::new(&format!("{}Args", camel(&e.name.to_string())), e.name.span());
-        let req = Ident::new(&format!("{}_req", e.name), e.name.span());
-        let resp = Ident::new(&format!("{}_resp", e.name), e.name.span());
-        let depth = Literal::usize_unsuffixed(e.depth);
-        let fname = &e.name;
+    let mut methods = TokenStream::new();
+    for c in calls {
+        let fname = &c.name;
+        let req = Ident::new(&format!("{fname}_req"), fname.span());
+        let resp = Ident::new(&format!("{fname}_resp"), fname.span());
+        let depth = Literal::usize_unsuffixed(c.depth);
+        let ret = c.ret.clone().unwrap_or_else(|| quote! { () });
 
-        let mut fields = TokenStream::new();
-        let mut call_args = TokenStream::new();
-        for (p, ty) in &e.params {
-            fields.extend(quote! { pub #p: #ty, });
-            call_args.extend(quote! { args.#p, });
-        }
-        let doc = Literal::string(&format!(" Arguments of a fabric call to [`{fname}`]."));
-        items.extend(quote! {
-            #[doc = #doc]
-            #[derive(::facet::Facet)]
-            pub struct #args { #fields }
-        });
-
-        ports.extend(quote! { pub #req: ::facet_hdl::FromFabricQueue<#args, #depth>, });
-        let invoke = quote! { ::facet_hdl::rpc::call(move || self::#fname(#call_args)) };
-        if e.oneway {
-            // Nobody is listening for the result; a panic is only reported by
-            // the panic hook.
-            arms.extend(quote! {
-                if let ::core::option::Option::Some(args) = self.#req.pop()? {
-                    let _ = #invoke;
-                    handled += 1;
-                }
-            });
+        // No parameters: the call is the handshake itself, a `()` entry.
+        let (args_ty, args_value, call_args) = if c.params.is_empty() {
+            (quote! { () }, quote! { () }, TokenStream::new())
         } else {
-            let ret = e.ret.clone().unwrap_or_else(|| quote! { () });
-            ports.extend(quote! {
-                pub #resp: ::facet_hdl::ToFabricQueue<::facet_hdl::rpc::CallResult<#ret>, #depth>,
+            let args = Ident::new(&format!("{}Args", camel(&fname.to_string())), fname.span());
+            let (mut fields, mut call_args, mut inits) = (TokenStream::new(), TokenStream::new(), TokenStream::new());
+            for (p, ty) in &c.params {
+                fields.extend(quote! { pub #p: #ty, });
+                call_args.extend(quote! { args.#p, });
+                inits.extend(quote! { #p, });
+            }
+            let doc = Literal::string(&format!(" Arguments of a call to `{fname}`."));
+            items.extend(quote! {
+                #[doc = #doc]
+                #[derive(::facet::Facet)]
+                pub struct #args { #fields }
             });
-            arms.extend(quote! {
-                if let ::core::option::Option::Some(args) = self.#req.pop()? {
-                    let result = #invoke;
-                    ::facet_hdl::rpc::respond(&mut self.#resp, &result)?;
-                    handled += 1;
+            (quote! { #args }, quote! { #args { #inits } }, call_args)
+        };
+
+        match c.dir {
+            Dir::Export => {
+                ports.extend(quote! { pub #req: ::facet_hdl::FromFabricQueue<#args_ty, #depth>, });
+                let bind_args = (!c.params.is_empty()).then(|| quote! { args });
+                let pattern = bind_args.unwrap_or_else(|| quote! { () });
+                let invoke = quote! { ::facet_hdl::rpc::call(move || self::#fname(#call_args)) };
+                if c.oneway {
+                    // Nobody is listening for the result; a panic is only
+                    // reported by the panic hook.
+                    arms.extend(quote! {
+                        if let ::core::option::Option::Some(#pattern) = self.#req.pop()? {
+                            let _ = #invoke;
+                            handled += 1;
+                        }
+                    });
+                } else {
+                    ports.extend(quote! {
+                        pub #resp: ::facet_hdl::ToFabricQueue<::facet_hdl::rpc::CallResult<#ret>, #depth>,
+                    });
+                    arms.extend(quote! {
+                        if let ::core::option::Option::Some(#pattern) = self.#req.pop()? {
+                            let result = #invoke;
+                            ::facet_hdl::rpc::respond(&mut self.#resp, &result)?;
+                            handled += 1;
+                        }
+                    });
                 }
-            });
+            }
+            Dir::Import => {
+                ports.extend(quote! { pub #req: ::facet_hdl::ToFabricQueue<#args_ty, #depth>, });
+                let mut params = TokenStream::new();
+                for (p, ty) in &c.params {
+                    params.extend(quote! { #p: #ty, });
+                }
+                let doc = Literal::string(&format!(
+                    " Calls the fabric's `{fname}`, waiting up to `timeout` for room and for the answer."
+                ));
+                if c.oneway {
+                    methods.extend(quote! {
+                        #[doc = #doc]
+                        pub fn #fname(&mut self, #params timeout: ::core::time::Duration)
+                            -> ::core::result::Result<(), ::facet_hdl::PortError>
+                        {
+                            ::facet_hdl::rpc::send(&mut self.#req, &#args_value, timeout)
+                        }
+                    });
+                } else {
+                    ports.extend(quote! { pub #resp: ::facet_hdl::FromFabricQueue<#ret, #depth>, });
+                    methods.extend(quote! {
+                        #[doc = #doc]
+                        pub fn #fname(&mut self, #params timeout: ::core::time::Duration)
+                            -> ::core::result::Result<#ret, ::facet_hdl::PortError>
+                        {
+                            ::facet_hdl::rpc::invoke(&mut self.#req, &#args_value, &mut self.#resp, timeout)
+                        }
+                    });
+                }
+            }
         }
     }
-    let first_req = Ident::new(&format!("{}_req", exports[0].name), exports[0].name.span());
-    quote! {
-        #items
 
-        /// The boundary the fabric calls through: generate its VHDL from this
-        /// type, `bind` it, then run [`Self::serve`].
-        #[derive(::facet::Facet)]
-        pub struct #boundary { #ports }
-
-        impl #boundary {
-            /// Answers at most one waiting call per fn. Returns how many it answered.
+    // `poll`/`serve` answer the fabric, so only exports need them.
+    if let Some(first) = calls.iter().find(|c| c.dir == Dir::Export) {
+        let first_req = Ident::new(&format!("{}_req", first.name), first.name.span());
+        methods.extend(quote! {
+            /// Answers at most one waiting call per exported fn. Returns how many it answered.
             pub fn poll(&mut self) -> ::core::result::Result<usize, ::facet_hdl::PortError> {
                 let mut handled = 0usize;
                 #arms
@@ -304,7 +382,17 @@ fn generate(boundary: &Ident, exports: &[Export]) -> TokenStream {
                     }
                 }
             }
-        }
+        });
+    }
+    quote! {
+        #items
+
+        /// The boundary the calls go through: generate its VHDL from this
+        /// type, then `bind` it.
+        #[derive(::facet::Facet)]
+        pub struct #boundary { #ports }
+
+        impl #boundary { #methods }
     }
 }
 
@@ -340,7 +428,7 @@ mod tests {
             .unwrap();
         let out = expand(TokenStream::new(), item).unwrap().to_string();
         assert!(out.contains("pub fn add_two"), "{out}");
-        assert!(!out.contains("export"), "the attribute is consumed: {out}");
+        assert!(!out.contains("# [export"), "the attribute is consumed: {out}");
         assert!(out.contains("pub struct AddTwoArgs"), "{out}");
         assert!(
             out.contains("pub b : Result < u8 , Y >"),
@@ -363,10 +451,55 @@ mod tests {
     }
 
     #[test]
+    fn no_arguments_means_a_unit_entry() {
+        let item: TokenStream = "mod m { #[export] fn tick() -> u8 { 1 } #[import] fn ping(); }"
+            .parse()
+            .unwrap();
+        let out = expand(TokenStream::new(), item).unwrap().to_string();
+        assert!(
+            out.contains("tick_req : :: facet_hdl :: FromFabricQueue < () , 4 >"),
+            "{out}"
+        );
+        assert!(
+            out.contains("ping_req : :: facet_hdl :: ToFabricQueue < () , 4 >"),
+            "{out}"
+        );
+        assert!(
+            out.contains("ping_resp : :: facet_hdl :: FromFabricQueue < () , 4 >"),
+            "{out}"
+        );
+        assert!(!out.contains("TickArgs"), "{out}");
+    }
+
+    #[test]
+    fn imports_become_methods_and_lose_their_declaration() {
+        let item: TokenStream =
+            "mod m { #[import(depth = 8)] pub fn scale(x: u16) -> u32; #[import(oneway)] fn led(on: bool); }"
+                .parse()
+                .unwrap();
+        let out = expand(TokenStream::new(), item).unwrap().to_string();
+        assert!(!out.contains("pub fn scale (x"), "the bodiless fn is gone: {out}");
+        assert!(out.contains("pub fn scale (& mut self , x : u16 , timeout"), "{out}");
+        assert!(out.contains("Result < u32 , :: facet_hdl :: PortError >"), "{out}");
+        assert!(
+            out.contains("scale_req : :: facet_hdl :: ToFabricQueue < ScaleArgs , 8 >"),
+            "{out}"
+        );
+        assert!(
+            out.contains("scale_resp : :: facet_hdl :: FromFabricQueue < u32 , 8 >"),
+            "{out}"
+        );
+        assert!(!out.contains("led_resp"), "{out}");
+        assert!(!out.contains("fn serve"), "nothing to serve without exports: {out}");
+    }
+
+    #[test]
     fn refuses_what_it_cant_carry() {
         assert!(err("mod m { #[export(oneway)] fn f(x: u8) -> u8 { x } }").contains("oneway"));
-        assert!(err("mod m { #[export] fn f() -> u8 { 1 } }").contains("at least one"));
-        assert!(err("mod m { fn f(x: u8) {} }").contains("no #[export]"));
+        assert!(err("mod m { fn f(x: u8) {} }").contains("no #[export] or #[import]"));
+        assert!(err("mod m { #[import] fn f(x: u8) -> u8 { x } }").contains("no body"));
+        assert!(err("mod m { #[export] fn f(x: u8); }").contains("needs a body"));
+        assert!(err("mod m { #[import] fn f(timeout: u8); }").contains("rename yours"));
         assert!(err("mod m { #[export] fn f(&self, x: u8) {} }").contains("free functions"));
         assert!(err("mod m { #[export] fn f(x: u8) where u8: Copy {} }").contains("generic"));
         assert!(err("mod m { #[export(depth = 3)] fn f(x: u8) {} }").contains("power of two"));

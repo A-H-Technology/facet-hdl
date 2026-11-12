@@ -311,6 +311,9 @@ fn queue_port(p: &PortDecl, depth: u32, ns: &mut Namespace) -> Result<Parts, Nam
         ns.claim(n, origin(what))?;
     }
 
+    if p.ty.width() == 0 {
+        return unit_queue_port(p, depth, out, [&valid, &ready, &head, &tail]);
+    }
     let mark = type_mark(&p.ty);
     let w = p.ty.width();
     let hi = (w - 1).to_string();
@@ -467,6 +470,80 @@ fn queue_port(p: &PortDecl, depth: u32, ns: &mut Namespace) -> Result<Parts, Nam
                     .unwrap();
                 }
             }
+        }
+    }
+    Ok(out)
+}
+
+/// A queue of `()`: no storage and no data port, just the two counters behind
+/// a `_valid`/`_ready` handshake. The host pops by writing the tail as usual,
+/// and pushes by writing the new head, since there's no entry word to commit on.
+fn unit_queue_port(
+    p: &PortDecl,
+    depth: u32,
+    mut out: Parts,
+    [valid, ready, head, tail]: [&String; 4],
+) -> Result<Parts, NameError> {
+    let has_room = format!("{head} - {tail} < {depth}");
+    let (tail_w, head_w) = (p.word + queue::TAIL, p.word + queue::HEAD);
+    writeln!(
+        out.signals,
+        "  signal {head}, {tail} : unsigned(31 downto 0) := (others => '0');"
+    )
+    .unwrap();
+    writeln!(
+        out.resets,
+        "          {head} <= (others => '0');\n          {tail} <= (others => '0');"
+    )
+    .unwrap();
+    for (word, counter) in [(tail_w, tail), (head_w, head)] {
+        writeln!(
+            out.reads,
+            "            when {word} =>\n              s2m.rdata <= std_logic_vector({counter});"
+        )
+        .unwrap();
+    }
+    match p.direction {
+        Direction::ToFabric => {
+            writeln!(
+                out.ports,
+                "    -- Host -> fabric queue of {depth} with no data, words {tail_w}..={head_w}; consumed when valid and ready\n    {valid} : out std_logic;\n    {ready} : in std_logic;"
+            )
+            .unwrap();
+            writeln!(out.outputs, "  {valid} <= '1' when {head} /= {tail} else '0';").unwrap();
+            writeln!(
+                out.fabric,
+                "        if {head} /= {tail} and {ready} = '1' then\n          {tail} <= {tail} + 1;\n        end if;"
+            )
+            .unwrap();
+            // Only the next count is a push, so a retried write can't add a second.
+            writeln!(
+                out.writes,
+                "            when {head_w} =>\n              if unsigned(axi_in.wdata) = {head} + 1 and {has_room} then\n                {head} <= {head} + 1;\n              end if;"
+            )
+            .unwrap();
+        }
+        Direction::FromFabric => {
+            writeln!(
+                out.ports,
+                "    -- Fabric -> host queue of {depth} with no data, words {tail_w}..={head_w}; pushed when valid and ready\n    {valid} : in std_logic;\n    {ready} : out std_logic;"
+            )
+            .unwrap();
+            writeln!(
+                out.outputs,
+                "  {ready} <= '1' when rst_n = '1' and {has_room} else '0';"
+            )
+            .unwrap();
+            writeln!(
+                out.fabric,
+                "        if {valid} = '1' and {has_room} then\n          {head} <= {head} + 1;\n        end if;"
+            )
+            .unwrap();
+            writeln!(
+                out.writes,
+                "            when {tail_w} =>\n              if unsigned(axi_in.wdata) - {tail} <= {head} - {tail} then\n                {tail} <= unsigned(axi_in.wdata);\n              end if;"
+            )
+            .unwrap();
         }
     }
     Ok(out)

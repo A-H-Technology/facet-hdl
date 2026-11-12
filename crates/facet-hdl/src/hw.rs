@@ -51,10 +51,18 @@ pub enum HwType {
         /// `None` for a variant without a payload (or whose payload is `()`).
         variants: Vec<(&'static str, Option<HwType>)>,
     },
+    /// `()`, zero bits. Only a whole queue entry can be this: the fabric then
+    /// sees just `_valid`/`_ready`, the handshake itself being the message
+    /// (a call with no arguments, an answer that only says "done"). Nested
+    /// in another type it would be a field with no bits, which is rejected.
+    Unit,
 }
 
 impl HwType {
     pub fn of(shape: &'static Shape) -> Result<Self, LayoutError> {
+        if shape.id == <()>::SHAPE.id {
+            return Ok(Self::Unit);
+        }
         Self::resolve(shape, &mut Vec::new(), &mut Vec::new())
     }
 
@@ -208,6 +216,7 @@ impl HwType {
             Self::Struct { fields, .. } => fields.iter().map(|(_, t)| t.width()).sum(),
             Self::Array { elem, len } => elem.width() * *len as u32,
             Self::Tagged { .. } => self.tag_width() + self.payload_width(),
+            Self::Unit => 0,
         }
     }
 
@@ -260,7 +269,7 @@ impl HwType {
     /// Types directly inside this one.
     pub fn children(&self) -> Vec<&HwType> {
         match self {
-            Self::Bool | Self::Int { .. } | Self::Enum { .. } => Vec::new(),
+            Self::Bool | Self::Int { .. } | Self::Enum { .. } | Self::Unit => Vec::new(),
             Self::Struct { fields, .. } => fields.iter().map(|(_, t)| t).collect(),
             Self::Array { elem, .. } => vec![elem],
             Self::Tagged { variants, .. } => variants.iter().filter_map(|(_, p)| p.as_ref()).collect(),
@@ -278,6 +287,7 @@ impl fmt::Display for HwType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Bool => write!(f, "bool"),
+            Self::Unit => write!(f, "()"),
             Self::Int { bits, signed } => write!(f, "{}{bits}", if *signed { 'i' } else { 'u' }),
             Self::Enum { shape, variants } => write!(f, "{}{{{}}}", shape.type_identifier, variants.join(",")),
             Self::Struct { shape, fields } => {
@@ -324,6 +334,8 @@ pub enum LayoutError {
     NotAPort(String),
     #[error("two different types are both called `{0}`; generated code would conflate them")]
     NameClash(String),
+    #[error("register `{0}` carries `()`; a register needs bits (a queue of `()` is fine)")]
+    UnitRegister(&'static str),
     #[error("queue `{port}` has depth {depth}; it must be a power of two from 2 to 65536")]
     QueueDepth { port: &'static str, depth: u64 },
 }
