@@ -44,6 +44,7 @@ HPS-to-FPGA bridge, but the pieces are separate crates:
 
 | crate | role |
 | --- | --- |
+| `facet-hdl-macros` | `#[facet_hdl::rpc]` (re-exported from `facet-hdl`), parsed with unsynn |
 | `facet-hdl` | `ToFabric`/`FromFabric` registers, `ToFabricQueue`/`FromFabricQueue` channels, shape → `HwType`, bit codec, `Boundary` layout, `Transport`, `bind` |
 | `facet-hdl-vhdl` | VHDL-2008 package and AXI4-Lite register entity; `literal(&value)` renders a Rust value as a VHDL constant |
 | `facet-hdl-ghdl` | Co-simulation: GHDL runs the fabric, and a generated testbench turns stdin lines into AXI transactions. `SimTransport` makes the real host code drive it |
@@ -55,6 +56,47 @@ nix develop --command cargo test                  # incl. GHDL co-sim
 nix develop --command cargo run --bin blinky-gen  # regenerate examples/blinky/hdl/generated
 nix build .#blinky-hps                            # static aarch64-musl CLI for mercury
 ```
+
+## The fabric calls Rust
+
+Mark functions in a module, and the fabric gets a call port for each:
+
+```rust
+#[facet_hdl::rpc]
+pub mod calc {
+    #[export(depth = 8)]            // up to 8 calls in flight
+    pub fn add(a: u32, b: u32) -> Option<u32> { a.checked_add(b) }
+
+    #[export]                       // () still answers: done, or panicked
+    pub fn apply(cfg: Config) { /* ... */ }
+
+    #[export(oneway)]               // no answer at all; must return ()
+    pub fn log(ev: Event) { /* ... */ }
+}
+
+let mut calc: calc::Calc = bind(transport)?;
+calc.serve()?;                      // or calc.poll() from your own loop
+```
+
+The fns stay as written, so Rust can still call them. The macro adds an
+argument struct per fn (`AddArgs { a, b }`) and a boundary named after the
+module (`Calc`) with two queues per fn:
+
+- `add_req` (fabric → host): the fabric pushes `add_args_t` with
+  `add_req_valid`/`add_req_ready`.
+- `add_resp` (host → fabric): the answer, a `CallResult<T>`: `Returned(T)` or
+  `Panicked`. In VHDL that's `call_option_u32_t`, with `tag` and `returned`.
+  A `oneway` fn has no `_resp`.
+
+The rings are FIFO, so answers come back in call order and the fabric can
+issue up to `depth` calls before the first answer. `serve` sleeps on the
+irq line between calls. A panic is caught: a normal fn answers `Panicked`,
+and a oneway one is only reported by the panic hook. If the fabric stops
+draining a `_resp` queue, `serve` waits on it (there's no "room" interrupt)
+and stops answering other fns until it drains.
+
+Limits for now: every fn takes at least one argument (an empty struct has no
+bits to queue), no generics, no `self`, and parameters are `name: Type`.
 
 ## Wire format
 
@@ -171,6 +213,18 @@ These are the rules `codec.rs` and the generated VHDL both implement.
   `reg` is smaller than the boundary, and the shared lock path. **Not
   verified:** `UioIrq` (unmask by writing 1, `poll`, read the count). That
   needs a real `uio_pdrv_genirq` device.
+
+- RPC co-sim: the fabric is the caller. It fires 64 `add` calls back to
+  back, 8 in flight, alongside 16 `check` calls, one of which panics in
+  Rust. It checks every answer tag by tag (`Some`/`None`, `Ok`/`Err`,
+  `Panicked`) and reports its tally through a oneway call. Planting an
+  off-by-one in Rust's `add` makes the fabric report 56 mismatches, the 56
+  calls that don't overflow.
+- That test found a bug in the register file: a `FromFabricQueue`'s
+  `_ready` stayed high in reset, while the ring ignored pushes, so a
+  producer outside our reset lost entries. `_ready` is now low in reset, and
+  the RPC co-sim's fabric is deliberately not reset, so the bug can't come
+  back silently.
 
 ## Not yet: running on mercury
 

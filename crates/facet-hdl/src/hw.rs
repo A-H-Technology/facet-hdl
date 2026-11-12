@@ -10,6 +10,9 @@ pub enum TaggedOrigin {
     User(&'static Shape),
     Option,
     Result,
+    /// [`crate::rpc::CallResult`]: generic like `Option`, so it's named after
+    /// its payload too, or two fns returning different types would clash.
+    Call(&'static Shape),
 }
 
 /// A type that has a fixed bit-level representation on the fabric.
@@ -153,10 +156,12 @@ impl HwType {
                     variants.push((v.name, payload));
                 }
                 open.pop();
-                Ok(Self::Tagged {
-                    origin: TaggedOrigin::User(shape),
-                    variants,
-                })
+                let origin = if shape.decl_id == crate::rpc::CallResult::<()>::SHAPE.decl_id {
+                    TaggedOrigin::Call(shape)
+                } else {
+                    TaggedOrigin::User(shape)
+                };
+                Ok(Self::Tagged { origin, variants })
             }
             Type::User(UserType::Struct(st)) => {
                 if open.contains(&shape.id) {
@@ -291,6 +296,7 @@ impl fmt::Display for HwType {
                     TaggedOrigin::User(shape) => write!(f, "{}", shape.type_identifier)?,
                     TaggedOrigin::Option => write!(f, "Option")?,
                     TaggedOrigin::Result => write!(f, "Result")?,
+                    TaggedOrigin::Call(_) => write!(f, "CallResult")?,
                 }
                 write!(f, "{{")?;
                 for (i, (name, payload)) in variants.iter().enumerate() {

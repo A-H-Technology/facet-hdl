@@ -1,0 +1,12 @@
+[package]
+name = "facet-hdl-macros"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "#[facet_hdl::rpc]: Rust functions the fabric calls"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+unsynn = "0.3"

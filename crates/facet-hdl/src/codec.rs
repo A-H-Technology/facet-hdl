@@ -81,7 +81,7 @@ fn encode_peek(peek: Peek<'_, 'static>, ty: &HwType, w: &mut BitWriter) {
                     let r = peek.into_result().expect(BUG);
                     if r.is_ok() { (0, r.ok()) } else { (1, r.err()) }
                 }
-                TaggedOrigin::User(_) => {
+                TaggedOrigin::User(_) | TaggedOrigin::Call(_) => {
                     let e = peek.into_enum().expect(BUG);
                     let idx = e.variant_index().expect(BUG);
                     (idx, e.field(0).expect(BUG))
@@ -159,6 +159,7 @@ fn decode_into(p: Partial<'static>, ty: &HwType, r: &mut BitReader<'_>) -> Resul
                         TaggedOrigin::User(shape) => shape.type_identifier,
                         TaggedOrigin::Option => "Option",
                         TaggedOrigin::Result => "Result",
+                        TaggedOrigin::Call(_) => "CallResult",
                     },
                     index: idx,
                 });
@@ -180,7 +181,7 @@ fn decode_into(p: Partial<'static>, ty: &HwType, r: &mut BitReader<'_>) -> Resul
                 (TaggedOrigin::Option, _) => fill(p.begin_some().map_err(reflect)?, r)?,
                 (TaggedOrigin::Result, 0) => fill(p.begin_ok().map_err(reflect)?, r)?,
                 (TaggedOrigin::Result, _) => fill(p.begin_err().map_err(reflect)?, r)?,
-                (TaggedOrigin::User(shape), _) => {
+                (TaggedOrigin::User(shape) | TaggedOrigin::Call(shape), _) => {
                     let p = p.select_nth_variant(idx).map_err(reflect)?;
                     let has_field = matches!(
                         shape.ty,

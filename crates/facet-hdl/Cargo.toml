@@ -8,3 +8,4 @@ description = "Declare an HPS<->FPGA register boundary once, as facet types"
 [dependencies]
 facet.workspace = true
 thiserror = "2"
+facet-hdl-macros = { path = "../facet-hdl-macros" }

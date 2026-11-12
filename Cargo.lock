@@ -66,6 +66,7 @@ name = "facet-hdl"
 version = "0.1.0"
 dependencies = [
  "facet",
+ "facet-hdl-macros",
  "thiserror",
 ]
 
@@ -86,6 +87,13 @@ dependencies = [
  "facet-hdl",
  "libc",
  "memmap2",
+]
+
+[[package]]
+name = "facet-hdl-macros"
+version = "0.1.0"
+dependencies = [
+ "unsynn",
 ]
 
 [[package]]

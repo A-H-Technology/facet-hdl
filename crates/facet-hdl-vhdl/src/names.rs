@@ -42,10 +42,11 @@ pub fn type_stem(ty: &HwType) -> String {
         HwType::Tagged { origin, variants } => match origin {
             TaggedOrigin::User(shape) => snake(shape.type_identifier),
             // Named after the payloads, like arrays: `option_u8`, `result_bool_mode`.
-            TaggedOrigin::Option | TaggedOrigin::Result => {
+            TaggedOrigin::Option | TaggedOrigin::Result | TaggedOrigin::Call(_) => {
                 let payload = |i: usize| variants[i].1.as_ref().map_or("unit".into(), type_stem);
                 match origin {
                     TaggedOrigin::Option => format!("option_{}", payload(1)),
+                    TaggedOrigin::Call(_) => format!("call_{}", payload(0)),
                     _ => format!("result_{}_{}", payload(0), payload(1)),
                 }
             }

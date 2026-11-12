@@ -28,6 +28,9 @@ mod boundary;
 pub mod codec;
 mod hw;
 mod port;
+pub mod rpc;
+
+pub use facet_hdl_macros::rpc;
 
 pub use boundary::{Boundary, Direction, FINGERPRINT_WORD, PortDecl, PortKind, queue};
 pub use hw::{HwType, LayoutError, TaggedOrigin};

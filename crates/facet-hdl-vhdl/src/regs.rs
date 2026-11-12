@@ -323,7 +323,7 @@ fn queue_port(p: &PortDecl, depth: u32, ns: &mut Namespace) -> Result<Parts, Nam
 
     writeln!(
         out.signals,
-        "  type {mem_t} is array (0 to {}) of std_logic_vector({hi} downto 0);\n  signal {mem} : {mem_t};\n  signal {head}, {tail} : unsigned(31 downto 0) := (others => '0');",
+        "  type {mem_t} is array (0 to {}) of std_logic_vector({hi} downto 0);\n  signal {mem} : {mem_t} := (others => (others => '0'));\n  signal {head}, {tail} : unsigned(31 downto 0) := (others => '0');",
         depth - 1
     )
     .unwrap();
@@ -414,7 +414,13 @@ fn queue_port(p: &PortDecl, depth: u32, ns: &mut Namespace) -> Result<Parts, Nam
                 p.word
             )
             .unwrap();
-            writeln!(out.outputs, "  {ready} <= '1' when {has_room} else '0';").unwrap();
+            // Not ready in reset: the push would be ignored, and a producer
+            // that isn't reset with us would count it as taken and lose it.
+            writeln!(
+                out.outputs,
+                "  {ready} <= '1' when rst_n = '1' and {has_room} else '0';"
+            )
+            .unwrap();
             writeln!(out.vars, "    variable {incoming} : std_logic_vector({hi} downto 0);").unwrap();
             writeln!(
                 out.fabric,

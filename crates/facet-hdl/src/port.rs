@@ -274,6 +274,13 @@ impl<T: Facet<'static>, const N: usize> FromFabricQueue<T, N> {
         Ok(Some(codec::decode(&words, &self.port.ty)?))
     }
 
+    /// Sleeps until the boundary's interrupt is high, meaning some
+    /// `FromFabricQueue` (not necessarily this one) holds an entry, or
+    /// `timeout`. Without an interrupt it returns at once, so callers loop.
+    pub fn wait_irq(&self, timeout: Duration) -> Result<(), PortError> {
+        Ok(self.port.bus.wait_irq(timeout)?)
+    }
+
     /// Like [`pop`](Self::pop), but sleeps on the boundary's interrupt until
     /// an entry arrives or `timeout` passes (`Ok(None)`). Without an
     /// interrupt from the transport it polls instead, so it works anywhere.
