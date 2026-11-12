@@ -287,3 +287,8 @@ Candidates for single-sourcing next: the Platform Designer `_hw.tcl` for the
 register entity, and that device-tree node. Address span, interface and
 interrupt come straight from `Boundary` for both. Reset values could come from
 `Default`.
+
+## Licence
+
+EUPL-1.2, see [LICENSE](LICENSE). Commits up to d10bcc4 were published under
+MIT OR Apache-2.0 and stay available under those terms.

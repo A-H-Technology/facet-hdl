@@ -4,7 +4,7 @@ members = ["crates/*", "examples/*"]
 
 [workspace.package]
 edition = "2024"
-license = "MIT OR Apache-2.0"
+license = "EUPL-1.2"
 
 [workspace.dependencies]
 # Pinned to the rc because 0.50 is where facet's current docs and the local
