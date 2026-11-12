@@ -118,7 +118,9 @@ HPS-to-FPGA bridge, but the pieces are separate crates:
 ```sh
 nix develop --command cargo test                                 # incl. the iverilog co-sims
 nix develop --command cargo run --features gen --bin hello-gen   # regenerate examples/hello/hdl/generated
-nix build .#hello-hps                                            # static aarch64-musl CLI for mercury
+nix build .#hello-hps                                            # static aarch64-musl hello + hello-async for mercury
+nix develop --command cargo run --features gen --bin hello-de25  # the DE25 top as examples/hello/de25/build/spade.sv
+examples/hello/de25/build.sh                                     # Quartus: build/hello.core.rbf (see "On mercury")
 ```
 
 ## Calls: the fabric calls Rust, Rust calls the fabric
@@ -351,28 +353,53 @@ watching it fail.
   verified:** `UioIrq` (unmask by writing 1, `poll`, read the count). That
   needs a real `uio_pdrv_genirq` device.
 
-## Not yet: running on mercury
+## On mercury
 
-Nothing has touched hardware. `hello-hps` builds. chipsmith builds and loads
-DE25-Nano cores itself now, and mercury boots chipsmith's HPS-first phase 1
-from QSPI (chipsmith 98c0898), so what's left is the bridge:
+On 2026-11-12, hello ran on the DE25-Nano, built by Quartus Prime Pro 26.1.1
+rather than chipsmith: chipsmith's place and route doesn't map the
+lightweight bridge's `lwhps2fpga_*` ports yet (only `f2h_irq0[0]` and
+`[3]`). `examples/hello/de25` is agilex5-re's `designs/hpsf` with its
+read-only bridge responder swapped for `hello_de25` (`hdl/de25_top.spade`:
+the fabric, KEY[0] synchronised and debounced for 10.5 ms, irq on
+`f2h_irq0[0]`); the HPS IP and pins are hpsf's, so the core keeps the
+board's phase 1 HPS IO hash (D921CDF7…C3D07A) and `chipsmith flash --ssh`
+loads it. No bridge driver or firmware call is needed: a core load releases
+the bridges (nixos-fpga 5240fbc).
 
-1. **The bridge's fabric-side ports.** Phase 1 exports the lightweight
-   bridge as full AXI4 (32-bit data, 29-bit address, 4-bit IDs, bursts),
-   which is what `facet_hdl.spade`'s slave speaks. chipsmith/a5pnr don't map
-   those ~200 HPS signals as nodes yet; only `f2h_irq0` is.
-2. **Enabling the bridge after a load from Linux.** U-Boot's `bridge enable`
-   runs before the fabric exists, and the kernel has no Agilex bridge
-   driver; the ATF SMC `HPS_SET_BRIDGES` is the way in, likely a small
-   module in nixos-fpga.
-3. **For `Uio` and its interrupt:** a device-tree node with
-   `compatible = "generic-uio"`, `reg` covering the window, and `irq` wired
-   to an FPGA-to-HPS interrupt as a level-high SPI (`f2h_irq0` already works
-   on the board), plus `uio_pdrv_genirq.of_id=generic-uio` on the kernel
-   command line. This belongs in nixos-fpga.
-4. **Then:** `hello --uio <node name>`, or `hello --base
-   0x2000_0000+<component offset>` without the node, with `button` tied to
-   one of the board's keys.
+`build.sh` renames Spade's escaped module names (`\hello::hello_regs `)
+to plain ones first: Quartus' synthesis segfaults inferring the register
+file's queue RAMs inside such a module (reproduced in 30 s on `spade.sv`
+alone; plain names infer both RAMs and pass).
+
+Seen on the board:
+
+- **bind and add_one:** `hello --base 0x20000000` binds (word 0 reads
+  `0x014E106E`, the fingerprint) and prints `add_one(41) = 42`.
+- **Idle:** in 23 minutes with nobody at the board, no `pressed` call, so
+  the key input doesn't glitch. Polling `DevMem` costs about 18% of a core
+  (4:01 of CPU in 22:52). GICD_ISPENDR1 bit 17 (hello's irq) reads 0 with
+  no call pending.
+- **Overlapping calls on tokio:** `hello-async` runs `serve` with 64
+  `add_one` calls at once on one binding: all 64 right.
+- **Zero-timeout calls:** 10,000 tries, none abandoned: the fabric answers
+  in the cycle the request lands, and a call's first poll writes and reads
+  back with no await between. So a dropped call's late answer is still only
+  verified in the import co-sim's `slow`.
+
+Not yet seen:
+
+1. **A key press.** Nobody has pressed KEY[0] yet, so "one `pressed` per
+   press, none while held" isn't verified on hardware (the co-sim's 20-cycle
+   press is; the debouncer isn't simulated).
+2. **`Uio` and its interrupt.** mercury loads `uio_pdrv_genirq` but has no
+   node for it: it needs a device-tree overlay with
+   `compatible = "generic-uio"`, `reg` covering 0x2000_0000, and the irq as
+   a level-high SPI 17, plus `uio_pdrv_genirq.of_id=generic-uio` on the
+   kernel command line. That belongs in nixos-fpga, then `hello --uio`.
+3. **A late answer on hardware.** It needs an import that answers late, as
+   the co-sim's `slow` does.
+4. **chipsmith building it,** once a DE25 manifest takes the bridge's
+   ports; then `de25/build.sh` and `hpsf_top.sv` go.
 
 ## Licence
 

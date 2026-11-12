@@ -650,6 +650,8 @@ dependencies = [
  "facet-hdl-iverilog",
  "facet-hdl-linux",
  "facet-hdl-spade",
+ "futures",
+ "tokio",
 ]
 
 [[package]]

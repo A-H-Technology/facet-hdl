@@ -44,10 +44,11 @@
         nativeBuildInputs = [ toolchain platform.cargoSetupHook ];
         buildPhase = ''
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld \
-            cargo build --release --offline --target ${hpsTarget} --bin hello
+            cargo build --release --offline --target ${hpsTarget} --bin hello --bin hello-async
         '';
         installPhase = ''
           install -Dm755 target/${hpsTarget}/release/hello $out/bin/hello
+          install -Dm755 target/${hpsTarget}/release/hello-async $out/bin/hello-async
         '';
       };
 

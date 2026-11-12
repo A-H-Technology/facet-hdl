@@ -1,0 +1,45 @@
+// hello on the DE25-Nano: the fabric behind the lightweight HPS-to-FPGA
+// bridge, KEY[0] as the button. The Verilog shell around it (de25/
+// hpsf_top.sv) owns the HPS, the clock and the reset, and puts irq on
+// f2h_irq0[0].
+
+// KEY[0] bounces for a few ms on press and release; without this one press
+// can be several calls to pressed(). The level has to hold for 2^19 cycles
+// (10.5 ms at 50 MHz) before it counts.
+entity debounce(clk: clock, rst: bool, raw: bool) -> bool {
+    // Two flops first: the key is asynchronous to clk.
+    reg(clk) sync1: bool initial(false) = raw;
+    reg(clk) sync2: bool initial(false) = sync1;
+    decl stable;
+    reg(clk) held: uint<19> reset(rst: 0) initial(0) =
+        if sync2 == stable { 0 } else { held +. 1 };
+    reg(clk) stable: bool reset(rst: false) initial(false) =
+        if held == 0x7FFFF { sync2 } else { stable };
+    stable
+}
+
+#[no_mangle(all)]
+entity hello_de25(
+    clk: clock,
+    rst: bool,
+    key0_n: bool,
+    s_axi_awid: uint<4>, s_axi_awaddr: uint<29>, s_axi_awlen: uint<8>, s_axi_awvalid: bool, s_axi_awready: inv bool,
+    s_axi_wdata: uint<32>, s_axi_wvalid: bool, s_axi_wready: inv bool,
+    s_axi_bid: inv uint<4>, s_axi_bresp: inv uint<2>, s_axi_bvalid: inv bool, s_axi_bready: bool,
+    s_axi_arid: uint<4>, s_axi_araddr: uint<29>, s_axi_arlen: uint<8>, s_axi_arvalid: bool, s_axi_arready: inv bool,
+    s_axi_rid: inv uint<4>, s_axi_rdata: inv uint<32>, s_axi_rresp: inv uint<2>, s_axi_rlast: inv bool, s_axi_rvalid: inv bool, s_axi_rready: bool,
+    irq: inv bool,
+) {
+    // The bridge's addresses are already offsets into its 512 MiB window.
+    let axi = facet_hdl::AxiIn(
+        s_axi_awid, zext(s_axi_awaddr), s_axi_awlen, s_axi_awvalid, s_axi_wdata, s_axi_wvalid, s_axi_bready,
+        s_axi_arid, zext(s_axi_araddr), s_axi_arlen, s_axi_arvalid, s_axi_rready,
+    );
+    let button = inst debounce(clk, rst, !key0_n);
+    let (o, fabric_irq) = inst hello_fabric::hello_fabric(clk, rst, axi, button);
+    set s_axi_awready = o.awready; set s_axi_wready = o.wready;
+    set s_axi_bid = o.bid; set s_axi_bresp = o.bresp; set s_axi_bvalid = o.bvalid;
+    set s_axi_arready = o.arready; set s_axi_rid = o.rid; set s_axi_rdata = o.rdata;
+    set s_axi_rresp = o.rresp; set s_axi_rlast = o.rlast; set s_axi_rvalid = o.rvalid;
+    set irq = fabric_irq;
+}

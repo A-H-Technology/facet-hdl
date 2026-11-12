@@ -9,6 +9,8 @@ publish = false
 facet.workspace = true
 facet-hdl = { path = "../../crates/facet-hdl" }
 facet-hdl-linux = { path = "../../crates/facet-hdl-linux" }
+futures = "0.3"
+tokio = { version = "1", features = ["rt", "macros", "time"] }
 # Only the generator needs it, and the HPS binary mustn't cross-compile the
 # whole Spade compiler.
 facet-hdl-spade = { path = "../../crates/facet-hdl-spade", optional = true }
@@ -23,3 +25,7 @@ required-features = ["gen"]
 [dev-dependencies]
 facet-hdl-spade = { path = "../../crates/facet-hdl-spade" }
 facet-hdl-iverilog = { path = "../../crates/facet-hdl-iverilog" }
+
+[[bin]]
+name = "hello-de25"
+required-features = ["gen"]
