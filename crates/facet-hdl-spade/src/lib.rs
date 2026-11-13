@@ -14,6 +14,7 @@ mod literal;
 mod names;
 mod regs;
 mod types;
+mod vhdl;
 
 use facet::Facet;
 use facet_hdl::{Boundary, LayoutError};
@@ -21,6 +22,7 @@ use std::path::{Path, PathBuf};
 
 pub use compile::{Source, compile};
 pub use core::core_name;
+pub use vhdl::{flat_axi_glue as vhdl_flat_axi_glue, flat_axi_ports as vhdl_flat_axi_ports, library as vhdl_library, literal as vhdl_literal};
 pub use literal::literal;
 pub use names::NameError;
 pub use regs::{entity_name, ports_name};
@@ -37,8 +39,8 @@ pub struct Spade {
     /// VHDL. Compile it with [`Spade::compile_core`].
     pub core_name: String,
     pub core_code: String,
-    /// A VHDL package declaring `<module>_core` as a component.
-    pub core_vhdl: String,
+    boundary: Boundary,
+    core_pins: Vec<core::Pin>,
 }
 
 impl Spade {
@@ -66,8 +68,17 @@ impl Spade {
             code,
             core_name: core.name,
             core_code: core.spade,
-            core_vhdl: core.vhdl,
+            boundary: b.clone(),
+            core_pins: core.pins,
         })
+    }
+
+    /// `<module>.vhd`: VHDL types and codec for the boundary's Rust types,
+    /// and a `<module>_regs` entity around `<module>_core` with ports of
+    /// those types. Needs [`vhdl_library`] and the compiled core too. Only
+    /// this fails on names VHDL can't take, so Spade users never see that.
+    pub fn vhdl(&self) -> Result<String, Error> {
+        Ok(vhdl::generate(&self.boundary, &self.module, &self.core_pins)?)
     }
 
     /// Compiles `top` with the library and this boundary into SystemVerilog.
@@ -76,7 +87,7 @@ impl Spade {
     }
 
     /// `<module>_core` as SystemVerilog, ready for a Verilog or VHDL design
-    /// to instantiate; [`Spade::core_vhdl`] declares it for VHDL.
+    /// to instantiate; [`Spade::vhdl`] wraps it for VHDL.
     pub fn compile_core(&self) -> Result<String, String> {
         self.compile(&self.core_code)
     }

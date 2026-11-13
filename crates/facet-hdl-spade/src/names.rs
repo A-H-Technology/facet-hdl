@@ -83,4 +83,10 @@ pub enum NameError {
     Keyword { ident: String, origin: String },
     #[error("`{ident}` (from {origin}) is already taken in the generated register file; rename the port")]
     Clash { ident: String, origin: String },
+    #[error("`{ident}` (from {origin}) {why}; rename it")]
+    Vhdl {
+        ident: String,
+        origin: String,
+        why: &'static str,
+    },
 }

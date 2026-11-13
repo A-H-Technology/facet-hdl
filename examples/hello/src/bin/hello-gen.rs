@@ -1,8 +1,8 @@
 //! Regenerates `hdl/generated/` from `src/lib.rs`:
 //! `cargo run --features gen --bin hello-gen`.
 //!
-//! The Spade is for fabric written in Spade; `hello_core.sv` and
-//! `hello_core_pkg.vhd` are for fabric written in Verilog or VHDL.
+//! The Spade is for fabric written in Spade; `hello_core.sv` is the register
+//! file for Verilog, and with `hello.vhd` and `facet_hdl_pkg.vhd` for VHDL.
 
 fn fail(e: impl std::fmt::Display) -> ! {
     eprintln!("{e}");
@@ -17,7 +17,8 @@ fn main() {
     let mut files = spade.write_to(&out).expect("write generated Spade").to_vec();
     for (name, text) in [
         (format!("{}.sv", spade.core_name), sv),
-        (format!("{}_pkg.vhd", spade.core_name), spade.core_vhdl.clone()),
+        (format!("{}.vhd", spade.module), spade.vhdl().unwrap_or_else(|e| fail(e))),
+        ("facet_hdl_pkg.vhd".into(), facet_hdl_spade::vhdl_library()),
     ] {
         let path = out.join(name);
         std::fs::write(&path, text).expect("write generated core");

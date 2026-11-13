@@ -13,12 +13,12 @@
 `endif
 
 
-module \std::cdc::sync2[2109]  (
+module \std::cdc::sync2[2107]  (
         input clk_i,
         input input_i,
         output output__
     );
-    `COCOTB_CODE( std::cdc::sync2[2109] )
+    `COCOTB_CODE( std::cdc::sync2[2107] )
     logic \clk ;
     assign \clk  = clk_i;
     logic \input ;
@@ -51,7 +51,7 @@ module \std::cdc::sync2_bool  (
     logic _e_496;
     (* src = "<compiler dir>/stdlib/cdc.spade:31,14" *)
     
-    \std::cdc::sync2[2109]  \sync2_0 (.clk_i(\clk ), .input_i(\input ), .output__(_e_496));
+    \std::cdc::sync2[2107]  \sync2_0 (.clk_i(\clk ), .input_i(\input ), .output__(_e_496));
     assign output__ = _e_496;
 endmodule
 
@@ -224,9 +224,9 @@ module hello_core (
     (* src = "top.spade:22,11" *)
     logic[140:0] \axi ;
     (* src = "top.spade:23,34" *)
-    logic[65:0] _e_3421;
+    logic[65:0] _e_3418;
     (* src = "top.spade:23,34" *)
-    logic[65:0] _e_3422_mut;
+    logic[65:0] _e_3419_mut;
     (* src = "top.spade:23,34" *)
     logic[65:0] _e_1834;
     (* src = "top.spade:23,34" *)
@@ -275,13 +275,13 @@ module hello_core (
     logic[32:0] _e_1903;
     (* src = "top.spade:32,56" *)
     logic[31:0] \_ ;
-    logic _e_3439;
-    localparam[0:0] _e_3440 = 1;
-    logic _e_3441;
+    logic _e_3443;
+    localparam[0:0] _e_3444 = 1;
+    logic _e_3445;
     localparam[0:0] _e_1904 = 1;
     (* src = "top.spade:32,29" *)
     logic[32:0] _e_1905;
-    logic _e_3444;
+    logic _e_3448;
     localparam[0:0] _e_1906 = 0;
     (* src = "top.spade:32,29" *)
     logic _e_1898;
@@ -291,14 +291,14 @@ module hello_core (
     logic[32:0] _e_1914;
     (* src = "top.spade:33,55" *)
     logic[31:0] \v ;
-    logic _e_3456;
-    localparam[0:0] _e_3457 = 1;
-    logic _e_3458;
+    logic _e_3460;
+    localparam[0:0] _e_3461 = 1;
+    logic _e_3462;
     (* src = "top.spade:33,66" *)
     logic[31:0] _e_1915;
     (* src = "top.spade:33,28" *)
     logic[32:0] _e_1917;
-    logic _e_3472;
+    logic _e_3465;
     localparam[31:0] _e_1918 = 32'd0;
     (* src = "top.spade:33,28" *)
     logic[31:0] _e_1909;
@@ -347,9 +347,9 @@ module hello_core (
     logic[65:0] \o ;
     assign \axi  = {\s_axi_awid , \s_axi_awaddr , \s_axi_awlen , \s_axi_awvalid , \s_axi_wdata , \s_axi_wvalid , \s_axi_bready , \s_axi_arid , \s_axi_araddr , \s_axi_arlen , \s_axi_arvalid , \s_axi_rready };
     
-    assign _e_3421 = _e_3422_mut;
-    assign _e_1834 = {_e_3421};
-    assign {_e_3422_mut} = _e_1834_mut;
+    assign _e_3418 = _e_3419_mut;
+    assign _e_1834 = {_e_3418};
+    assign {_e_3419_mut} = _e_1834_mut;
     assign \axi_out  = _e_1834[65:0];
     assign _e_1834_mut[65:0] = \axi_out_inv_mut ;
     assign _e_1841 = \axi_out [65];
@@ -399,12 +399,12 @@ module hello_core (
     assign _e_1899 = _e_1900[32:0];
     
     assign \_  = _e_1903[31:0];
-    assign _e_3439 = _e_1903[32] == 1'd1;
-    assign _e_3441 = _e_3439 && _e_3440;
+    assign _e_3443 = _e_1903[32] == 1'd1;
+    assign _e_3445 = _e_3443 && _e_3444;
     
-    assign _e_3444 = _e_1905[32] == 1'd0;
+    assign _e_3448 = _e_1905[32] == 1'd0;
     always_comb begin
-        priority casez ({_e_3441, _e_3444})
+        priority casez ({_e_3445, _e_3448})
             2'b1?: _e_1898 = _e_1904;
             2'b01: _e_1898 = _e_1906;
             2'b?: _e_1898 = 1'dx;
@@ -417,15 +417,15 @@ module hello_core (
     assign _e_1910 = _e_1900[32:0];
     
     assign \v  = _e_1914[31:0];
-    assign _e_3456 = _e_1914[32] == 1'd1;
-    assign _e_3458 = _e_3456 && _e_3457;
+    assign _e_3460 = _e_1914[32] == 1'd1;
+    assign _e_3462 = _e_3460 && _e_3461;
     (* src = "top.spade:33,66" *)
     
     \hello::pack_add_one_args  \pack_add_one_args_0 (.v_i(\v ), .output__(_e_1915));
     
-    assign _e_3472 = _e_1917[32] == 1'd0;
+    assign _e_3465 = _e_1917[32] == 1'd0;
     always_comb begin
-        priority casez ({_e_3458, _e_3472})
+        priority casez ({_e_3462, _e_3465})
             2'b1?: _e_1909 = _e_1915;
             2'b01: _e_1909 = _e_1918;
             2'b?: _e_1909 = 32'dx;
@@ -512,7 +512,7 @@ module \facet_hdl::axi4_slave  (
     logic[84:0] _e_1969;
     (* src = "facet_hdl.spade:73,74" *)
     logic[84:0] _e_1972;
-    logic _e_3420;
+    logic _e_3422;
     (* src = "facet_hdl.spade:74,27" *)
     logic _e_1974;
     (* src = "facet_hdl.spade:75,26" *)
@@ -551,13 +551,13 @@ module \facet_hdl::axi4_slave  (
     logic[29:0] \word ;
     (* src = "facet_hdl.spade:81,9" *)
     logic[7:0] \left ;
-    logic _e_3425;
-    localparam[0:0] _e_3426 = 1;
-    localparam[0:0] _e_3427 = 1;
-    localparam[0:0] _e_3428 = 1;
-    logic _e_3429;
-    logic _e_3430;
-    logic _e_3431;
+    logic _e_3451;
+    localparam[0:0] _e_3452 = 1;
+    localparam[0:0] _e_3453 = 1;
+    localparam[0:0] _e_3454 = 1;
+    logic _e_3455;
+    logic _e_3456;
+    logic _e_3457;
     (* src = "facet_hdl.spade:81,45" *)
     logic _e_2005;
     (* src = "<compiler dir>/core/ops.spade:301,29" *)
@@ -591,9 +591,9 @@ module \facet_hdl::axi4_slave  (
     logic[84:0] _e_2028;
     (* src = "facet_hdl.spade:88,9" *)
     logic[11:0] id_n1;
-    logic _e_3434;
-    localparam[0:0] _e_3435 = 1;
-    logic _e_3436;
+    logic _e_3468;
+    localparam[0:0] _e_3469 = 1;
+    logic _e_3470;
     (* src = "facet_hdl.spade:88,36" *)
     logic _e_2030;
     (* src = "facet_hdl.spade:88,47" *)
@@ -608,13 +608,13 @@ module \facet_hdl::axi4_slave  (
     logic[29:0] word_n1;
     (* src = "facet_hdl.spade:89,9" *)
     logic[7:0] left_n1;
-    logic _e_3447;
-    localparam[0:0] _e_3448 = 1;
-    localparam[0:0] _e_3449 = 1;
-    localparam[0:0] _e_3450 = 1;
-    logic _e_3451;
-    logic _e_3452;
-    logic _e_3453;
+    logic _e_3473;
+    localparam[0:0] _e_3474 = 1;
+    localparam[0:0] _e_3475 = 1;
+    localparam[0:0] _e_3476 = 1;
+    logic _e_3477;
+    logic _e_3478;
+    logic _e_3479;
     (* src = "facet_hdl.spade:89,40" *)
     logic[84:0] _e_2040;
     (* src = "facet_hdl.spade:73,74" *)
@@ -627,15 +627,15 @@ module \facet_hdl::axi4_slave  (
     logic[7:0] left_n2;
     (* src = "facet_hdl.spade:90,9" *)
     logic[31:0] \data ;
-    logic _e_3461;
-    localparam[0:0] _e_3462 = 1;
-    localparam[0:0] _e_3463 = 1;
-    localparam[0:0] _e_3464 = 1;
-    localparam[0:0] _e_3465 = 1;
-    logic _e_3466;
-    logic _e_3467;
-    logic _e_3468;
-    logic _e_3469;
+    logic _e_3482;
+    localparam[0:0] _e_3483 = 1;
+    localparam[0:0] _e_3484 = 1;
+    localparam[0:0] _e_3485 = 1;
+    localparam[0:0] _e_3486 = 1;
+    logic _e_3487;
+    logic _e_3488;
+    logic _e_3489;
+    logic _e_3490;
     (* src = "facet_hdl.spade:90,54" *)
     logic _e_2052;
     (* src = "<compiler dir>/core/ops.spade:301,29" *)
@@ -671,11 +671,11 @@ module \facet_hdl::axi4_slave  (
     reg[84:0] \state ;
     (* src = "facet_hdl.spade:99,16" *)
     logic[84:0] _e_2075;
-    logic _e_3483;
+    logic _e_3511;
     localparam[0:0] _e_2076 = 1;
     (* src = "facet_hdl.spade:99,16" *)
     logic[84:0] \_ ;
-    localparam[0:0] _e_3485 = 1;
+    localparam[0:0] _e_3513 = 1;
     localparam[0:0] _e_2078 = 0;
     (* src = "facet_hdl.spade:99,16" *)
     logic \idle ;
@@ -683,15 +683,15 @@ module \facet_hdl::axi4_slave  (
     logic[84:0] _e_2083;
     (* src = "facet_hdl.spade:100,39" *)
     logic[11:0] id_n4;
-    logic _e_3488;
-    localparam[0:0] _e_3489 = 1;
-    logic _e_3490;
+    logic _e_3516;
+    localparam[0:0] _e_3517 = 1;
+    logic _e_3518;
     localparam[0:0] _e_2085 = 1;
     (* src = "facet_hdl.spade:100,63" *)
     logic[12:0] _e_2084;
     (* src = "facet_hdl.spade:100,25" *)
     logic[84:0] __n1;
-    localparam[0:0] _e_3500 = 1;
+    localparam[0:0] _e_3520 = 1;
     localparam[0:0] _e_2089 = 0;
     localparam[11:0] _e_2090 = 0;
     (* src = "facet_hdl.spade:100,80" *)
@@ -712,15 +712,15 @@ module \facet_hdl::axi4_slave  (
     logic[7:0] left_n3;
     (* src = "facet_hdl.spade:102,9" *)
     logic[31:0] data_n1;
-    logic _e_3503;
-    localparam[0:0] _e_3504 = 1;
-    localparam[0:0] _e_3505 = 1;
-    localparam[0:0] _e_3506 = 1;
-    localparam[0:0] _e_3507 = 1;
-    logic _e_3508;
-    logic _e_3509;
-    logic _e_3510;
-    logic _e_3511;
+    logic _e_3523;
+    localparam[0:0] _e_3524 = 1;
+    localparam[0:0] _e_3525 = 1;
+    localparam[0:0] _e_3526 = 1;
+    localparam[0:0] _e_3527 = 1;
+    logic _e_3528;
+    logic _e_3529;
+    logic _e_3530;
+    logic _e_3531;
     localparam[0:0] _e_2102 = 1;
     localparam[7:0] _e_2106 = 0;
     (* src = "<compiler dir>/core/ops.spade:53,9" *)
@@ -729,7 +729,7 @@ module \facet_hdl::axi4_slave  (
     logic[45:0] _e_2101;
     (* src = "facet_hdl.spade:101,43" *)
     logic[84:0] __n2;
-    localparam[0:0] _e_3515 = 1;
+    localparam[0:0] _e_3541 = 1;
     localparam[0:0] _e_2110 = 0;
     localparam[11:0] _e_2111 = 0;
     localparam[0:0] _e_2112 = 0;
@@ -754,13 +754,13 @@ module \facet_hdl::axi4_slave  (
     logic[29:0] word_n4;
     (* src = "facet_hdl.spade:106,9" *)
     logic[7:0] left_n4;
-    logic _e_3518;
-    localparam[0:0] _e_3519 = 1;
-    localparam[0:0] _e_3520 = 1;
-    localparam[0:0] _e_3521 = 1;
-    logic _e_3522;
-    logic _e_3523;
-    logic _e_3524;
+    logic _e_3544;
+    localparam[0:0] _e_3545 = 1;
+    localparam[0:0] _e_3546 = 1;
+    localparam[0:0] _e_3547 = 1;
+    logic _e_3548;
+    logic _e_3549;
+    logic _e_3550;
     (* src = "facet_hdl.spade:106,44" *)
     logic _e_2126;
     (* src = "facet_hdl.spade:106,75" *)
@@ -775,7 +775,7 @@ module \facet_hdl::axi4_slave  (
     logic[62:0] _e_2125;
     (* src = "facet_hdl.spade:105,17" *)
     logic[84:0] __n3;
-    localparam[0:0] _e_3526 = 1;
+    localparam[0:0] _e_3558 = 1;
     (* src = "facet_hdl.spade:107,14" *)
     logic[62:0] _e_2137;
     (* src = "facet_hdl.spade:105,17" *)
@@ -788,18 +788,18 @@ module \facet_hdl::axi4_slave  (
     logic[29:0] word_n5;
     (* src = "facet_hdl.spade:110,9" *)
     logic[7:0] left_n5;
-    logic _e_3539;
-    localparam[0:0] _e_3540 = 1;
-    localparam[0:0] _e_3541 = 1;
-    localparam[0:0] _e_3542 = 1;
-    logic _e_3543;
-    logic _e_3544;
-    logic _e_3545;
+    logic _e_3565;
+    localparam[0:0] _e_3566 = 1;
+    localparam[0:0] _e_3567 = 1;
+    localparam[0:0] _e_3568 = 1;
+    logic _e_3569;
+    logic _e_3570;
+    logic _e_3571;
     (* src = "facet_hdl.spade:110,40" *)
     logic[30:0] _e_2145;
     (* src = "facet_hdl.spade:109,16" *)
     logic[84:0] __n4;
-    localparam[0:0] _e_3547 = 1;
+    localparam[0:0] _e_3573 = 1;
     (* src = "facet_hdl.spade:111,14" *)
     logic[30:0] _e_2148;
     (* src = "facet_hdl.spade:109,16" *)
@@ -822,17 +822,17 @@ module \facet_hdl::axi4_slave  (
     logic[29:0] __n6;
     (* src = "facet_hdl.spade:116,27" *)
     logic[7:0] __n7;
-    logic _e_3550;
-    localparam[0:0] _e_3551 = 1;
-    localparam[0:0] _e_3552 = 1;
-    localparam[0:0] _e_3553 = 1;
-    logic _e_3554;
-    logic _e_3555;
-    logic _e_3556;
+    logic _e_3576;
+    localparam[0:0] _e_3577 = 1;
+    localparam[0:0] _e_3578 = 1;
+    localparam[0:0] _e_3579 = 1;
+    logic _e_3580;
+    logic _e_3581;
+    logic _e_3582;
     localparam[0:0] _e_2162 = 1;
     (* src = "facet_hdl.spade:116,13" *)
     logic[84:0] __n8;
-    localparam[0:0] _e_3558 = 1;
+    localparam[0:0] _e_3584 = 1;
     localparam[0:0] _e_2164 = 0;
     (* src = "facet_hdl.spade:116,13" *)
     logic _e_2156;
@@ -871,7 +871,7 @@ module \facet_hdl::axi4_slave  (
     assign _e_1968 = {3'd0, 82'bX};
     assign _e_1969 = {3'd0, 82'bX};
     
-    assign _e_3420 = _e_1972[84:82] == 3'd0;
+    assign _e_3422 = _e_1972[84:82] == 3'd0;
     assign _e_1974 = \i [88];
     assign _e_1978 = \i [140:129];
     assign _e_1981 = \i [128:97];
@@ -895,10 +895,10 @@ module \facet_hdl::axi4_slave  (
     assign \id  = _e_2002[81:70];
     assign \word  = _e_2002[69:40];
     assign \left  = _e_2002[39:32];
-    assign _e_3425 = _e_2002[84:82] == 3'd1;
-    assign _e_3429 = _e_3425 && _e_3426;
-    assign _e_3430 = _e_3429 && _e_3427;
-    assign _e_3431 = _e_3430 && _e_3428;
+    assign _e_3451 = _e_2002[84:82] == 3'd1;
+    assign _e_3455 = _e_3451 && _e_3452;
+    assign _e_3456 = _e_3455 && _e_3453;
+    assign _e_3457 = _e_3456 && _e_3454;
     assign _e_2005 = \i [55];
     assign _e_3907 = {_e_2005};
     assign _e_3906 = ~_e_3907;
@@ -914,8 +914,8 @@ module \facet_hdl::axi4_slave  (
     assign _e_2003 = _e_2004 ? \state  : _e_2009;
     
     assign id_n1 = _e_2028[81:70];
-    assign _e_3434 = _e_2028[84:82] == 3'd2;
-    assign _e_3436 = _e_3434 && _e_3435;
+    assign _e_3468 = _e_2028[84:82] == 3'd2;
+    assign _e_3470 = _e_3468 && _e_3469;
     assign _e_2030 = \i [54];
     assign _e_2033 = {3'd0, 82'bX};
     assign _e_2029 = _e_2030 ? _e_2033 : \state ;
@@ -923,21 +923,21 @@ module \facet_hdl::axi4_slave  (
     assign id_n2 = _e_2039[81:70];
     assign word_n1 = _e_2039[69:40];
     assign left_n1 = _e_2039[39:32];
-    assign _e_3447 = _e_2039[84:82] == 3'd3;
-    assign _e_3451 = _e_3447 && _e_3448;
-    assign _e_3452 = _e_3451 && _e_3449;
-    assign _e_3453 = _e_3452 && _e_3450;
+    assign _e_3473 = _e_2039[84:82] == 3'd3;
+    assign _e_3477 = _e_3473 && _e_3474;
+    assign _e_3478 = _e_3477 && _e_3475;
+    assign _e_3479 = _e_3478 && _e_3476;
     assign _e_2040 = {3'd4, id_n2, word_n1, left_n1, \rdata };
     
     assign id_n3 = _e_2049[81:70];
     assign word_n2 = _e_2049[69:40];
     assign left_n2 = _e_2049[39:32];
     assign \data  = _e_2049[31:0];
-    assign _e_3461 = _e_2049[84:82] == 3'd4;
-    assign _e_3466 = _e_3461 && _e_3462;
-    assign _e_3467 = _e_3466 && _e_3463;
-    assign _e_3468 = _e_3467 && _e_3464;
-    assign _e_3469 = _e_3468 && _e_3465;
+    assign _e_3482 = _e_2049[84:82] == 3'd4;
+    assign _e_3487 = _e_3482 && _e_3483;
+    assign _e_3488 = _e_3487 && _e_3484;
+    assign _e_3489 = _e_3488 && _e_3485;
+    assign _e_3490 = _e_3489 && _e_3486;
     assign _e_2052 = \i [0];
     assign _e_3925 = {_e_2052};
     assign _e_3924 = ~_e_3925;
@@ -952,7 +952,7 @@ module \facet_hdl::axi4_slave  (
     assign _e_2056 = _e_2057 ? _e_2061 : _e_2063;
     assign _e_2050 = _e_2051 ? \state  : _e_2056;
     always_comb begin
-        priority casez ({_e_3420, _e_3431, _e_3436, _e_3453, _e_3469})
+        priority casez ({_e_3422, _e_3457, _e_3470, _e_3479, _e_3490})
             5'b1????: _e_1970 = _e_1973;
             5'b01???: _e_1970 = _e_2003;
             5'b001??: _e_1970 = _e_2029;
@@ -978,10 +978,10 @@ module \facet_hdl::axi4_slave  (
         end
     end
     
-    assign _e_3483 = _e_2075[84:82] == 3'd0;
+    assign _e_3511 = _e_2075[84:82] == 3'd0;
     
     always_comb begin
-        priority casez ({_e_3483, _e_3485})
+        priority casez ({_e_3511, _e_3513})
             2'b1?: \idle  = _e_2076;
             2'b01: \idle  = _e_2078;
             2'b?: \idle  = 1'dx;
@@ -991,13 +991,13 @@ module \facet_hdl::axi4_slave  (
     assign \_  = \state ;
     
     assign id_n4 = _e_2083[81:70];
-    assign _e_3488 = _e_2083[84:82] == 3'd2;
-    assign _e_3490 = _e_3488 && _e_3489;
+    assign _e_3516 = _e_2083[84:82] == 3'd2;
+    assign _e_3518 = _e_3516 && _e_3517;
     assign _e_2084 = {_e_2085, id_n4};
     
     assign _e_2088 = {_e_2089, _e_2090};
     always_comb begin
-        priority casez ({_e_3490, _e_3500})
+        priority casez ({_e_3518, _e_3520})
             2'b1?: _e_2080 = _e_2084;
             2'b01: _e_2080 = _e_2088;
             2'b?: _e_2080 = 13'dx;
@@ -1012,17 +1012,17 @@ module \facet_hdl::axi4_slave  (
     assign word_n3 = _e_2100[69:40];
     assign left_n3 = _e_2100[39:32];
     assign data_n1 = _e_2100[31:0];
-    assign _e_3503 = _e_2100[84:82] == 3'd4;
-    assign _e_3508 = _e_3503 && _e_3504;
-    assign _e_3509 = _e_3508 && _e_3505;
-    assign _e_3510 = _e_3509 && _e_3506;
-    assign _e_3511 = _e_3510 && _e_3507;
+    assign _e_3523 = _e_2100[84:82] == 3'd4;
+    assign _e_3528 = _e_3523 && _e_3524;
+    assign _e_3529 = _e_3528 && _e_3525;
+    assign _e_3530 = _e_3529 && _e_3526;
+    assign _e_3531 = _e_3530 && _e_3527;
     assign _e_2104 = left_n3 == _e_2106;
     assign _e_2101 = {_e_2102, id_n5, _e_2104, data_n1};
     
     assign _e_2109 = {_e_2110, _e_2111, _e_2112, _e_2113};
     always_comb begin
-        priority casez ({_e_3511, _e_3515})
+        priority casez ({_e_3531, _e_3541})
             2'b1?: _e_2094 = _e_2101;
             2'b01: _e_2094 = _e_2109;
             2'b?: _e_2094 = 46'dx;
@@ -1038,10 +1038,10 @@ module \facet_hdl::axi4_slave  (
     assign id_n6 = _e_2124[81:70];
     assign word_n4 = _e_2124[69:40];
     assign left_n4 = _e_2124[39:32];
-    assign _e_3518 = _e_2124[84:82] == 3'd1;
-    assign _e_3522 = _e_3518 && _e_3519;
-    assign _e_3523 = _e_3522 && _e_3520;
-    assign _e_3524 = _e_3523 && _e_3521;
+    assign _e_3544 = _e_2124[84:82] == 3'd1;
+    assign _e_3548 = _e_3544 && _e_3545;
+    assign _e_3549 = _e_3548 && _e_3546;
+    assign _e_3550 = _e_3549 && _e_3547;
     assign _e_2126 = \i [55];
     assign _e_2132 = \i [87:56];
     assign _e_2130 = {word_n4, _e_2132};
@@ -1051,7 +1051,7 @@ module \facet_hdl::axi4_slave  (
     
     assign _e_2137 = {1'd0, 62'bX};
     always_comb begin
-        priority casez ({_e_3524, _e_3526})
+        priority casez ({_e_3550, _e_3558})
             2'b1?: \write  = _e_2125;
             2'b01: \write  = _e_2137;
             2'b?: \write  = 63'dx;
@@ -1063,15 +1063,15 @@ module \facet_hdl::axi4_slave  (
     assign id_n7 = _e_2144[81:70];
     assign word_n5 = _e_2144[69:40];
     assign left_n5 = _e_2144[39:32];
-    assign _e_3539 = _e_2144[84:82] == 3'd3;
-    assign _e_3543 = _e_3539 && _e_3540;
-    assign _e_3544 = _e_3543 && _e_3541;
-    assign _e_3545 = _e_3544 && _e_3542;
+    assign _e_3565 = _e_2144[84:82] == 3'd3;
+    assign _e_3569 = _e_3565 && _e_3566;
+    assign _e_3570 = _e_3569 && _e_3567;
+    assign _e_3571 = _e_3570 && _e_3568;
     assign _e_2145 = {1'd1, word_n5};
     
     assign _e_2148 = {1'd0, 30'bX};
     always_comb begin
-        priority casez ({_e_3545, _e_3547})
+        priority casez ({_e_3571, _e_3573})
             2'b1?: \read  = _e_2145;
             2'b01: \read  = _e_2148;
             2'b?: \read  = 31'dx;
@@ -1088,13 +1088,13 @@ module \facet_hdl::axi4_slave  (
     assign __n5 = _e_2161[81:70];
     assign __n6 = _e_2161[69:40];
     assign __n7 = _e_2161[39:32];
-    assign _e_3550 = _e_2161[84:82] == 3'd1;
-    assign _e_3554 = _e_3550 && _e_3551;
-    assign _e_3555 = _e_3554 && _e_3552;
-    assign _e_3556 = _e_3555 && _e_3553;
+    assign _e_3576 = _e_2161[84:82] == 3'd1;
+    assign _e_3580 = _e_3576 && _e_3577;
+    assign _e_3581 = _e_3580 && _e_3578;
+    assign _e_3582 = _e_3581 && _e_3579;
     
     always_comb begin
-        priority casez ({_e_3556, _e_3558})
+        priority casez ({_e_3582, _e_3584})
             2'b1?: _e_2156 = _e_2162;
             2'b01: _e_2156 = _e_2164;
             2'b?: _e_2156 = 1'dx;
@@ -1173,9 +1173,9 @@ module \hello::hello_regs  (
     logic[62:0] _e_2204;
     (* src = "hello.spade:38,9" *)
     logic[61:0] \w ;
-    logic _e_3475;
-    localparam[0:0] _e_3476 = 1;
-    logic _e_3477;
+    logic _e_3425;
+    localparam[0:0] _e_3426 = 1;
+    logic _e_3427;
     localparam[0:0] _e_2206 = 1;
     (* src = "hello.spade:38,27" *)
     logic[29:0] _e_2207;
@@ -1185,7 +1185,7 @@ module \hello::hello_regs  (
     logic[62:0] _e_2205;
     (* src = "hello.spade:37,34" *)
     logic[62:0] _e_2211;
-    logic _e_3480;
+    logic _e_3430;
     localparam[0:0] _e_2213 = 0;
     localparam[29:0] _e_2214 = 0;
     localparam[31:0] _e_2215 = 32'd0;
@@ -1205,15 +1205,15 @@ module \hello::hello_regs  (
     logic[30:0] _e_2224;
     (* src = "hello.spade:42,9" *)
     logic[29:0] \word ;
-    logic _e_3493;
-    localparam[0:0] _e_3494 = 1;
-    logic _e_3495;
+    logic _e_3433;
+    localparam[0:0] _e_3434 = 1;
+    logic _e_3435;
     localparam[0:0] _e_2226 = 1;
     (* src = "hello.spade:42,23" *)
     logic[30:0] _e_2225;
     (* src = "hello.spade:41,25" *)
     logic[30:0] _e_2228;
-    logic _e_3498;
+    logic _e_3438;
     localparam[0:0] _e_2230 = 0;
     localparam[29:0] _e_2231 = 0;
     (* src = "hello.spade:43,17" *)
@@ -1230,9 +1230,9 @@ module \hello::hello_regs  (
     (* src = "<compiler dir>/core/ops.spade:500,9" *)
     logic \add_one_req_room ;
     (* src = "hello.spade:47,27" *)
-    logic _e_3512;
+    logic _e_3439;
     (* src = "hello.spade:47,27" *)
-    logic _e_3513_mut;
+    logic _e_3440_mut;
     (* src = "hello.spade:47,27" *)
     logic \add_one_req_ack ;
     (* src = "hello.spade:47,27" *)
@@ -1319,9 +1319,9 @@ module \hello::hello_regs  (
     (* src = "<compiler dir>/core/ops.spade:500,9" *)
     logic \add_one_resp_room ;
     (* src = "hello.spade:61,30" *)
-    logic[32:0] _e_3527;
+    logic[32:0] _e_3491;
     (* src = "hello.spade:61,30" *)
-    logic[32:0] _e_3528_mut;
+    logic[32:0] _e_3492_mut;
     (* src = "hello.spade:61,30" *)
     logic[32:0] \add_one_resp_write ;
     (* src = "hello.spade:61,30" *)
@@ -1332,13 +1332,13 @@ module \hello::hello_regs  (
     logic[32:0] _e_2320;
     (* src = "hello.spade:62,59" *)
     logic[31:0] \_ ;
-    logic _e_3531;
-    localparam[0:0] _e_3532 = 1;
-    logic _e_3533;
+    logic _e_3495;
+    localparam[0:0] _e_3496 = 1;
+    logic _e_3497;
     localparam[0:0] _e_2321 = 1;
     (* src = "hello.spade:62,30" *)
     logic[32:0] _e_2322;
-    logic _e_3536;
+    logic _e_3500;
     localparam[0:0] _e_2323 = 0;
     (* src = "hello.spade:62,30" *)
     logic \add_one_resp_valid ;
@@ -1420,12 +1420,12 @@ module \hello::hello_regs  (
     logic[32:0] _e_2387;
     (* src = "hello.spade:75,117" *)
     logic[31:0] \add_one_resp_x ;
-    logic _e_3569;
-    localparam[0:0] _e_3570 = 1;
-    logic _e_3571;
+    logic _e_3534;
+    localparam[0:0] _e_3535 = 1;
+    logic _e_3536;
     (* src = "hello.spade:75,88" *)
     logic[32:0] _e_2389;
-    logic _e_3574;
+    logic _e_3539;
     localparam[31:0] _e_2390 = 32'd0;
     (* src = "hello.spade:75,88" *)
     logic[31:0] _e_2383;
@@ -1452,9 +1452,9 @@ module \hello::hello_regs  (
     (* src = "<compiler dir>/core/ops.spade:500,9" *)
     logic \pressed_req_room ;
     (* src = "hello.spade:79,29" *)
-    logic _e_3575;
+    logic _e_3551;
     (* src = "hello.spade:79,29" *)
-    logic _e_3576_mut;
+    logic _e_3552_mut;
     (* src = "hello.spade:79,29" *)
     logic \pressed_req_write ;
     (* src = "hello.spade:79,29" *)
@@ -1463,13 +1463,13 @@ module \hello::hello_regs  (
     logic _e_2410;
     (* src = "hello.spade:80,29" *)
     logic _e_2413;
-    logic _e_3579;
-    localparam[0:0] _e_3580 = 1;
-    logic _e_3581;
+    logic _e_3555;
+    localparam[0:0] _e_3556 = 1;
+    logic _e_3559;
     localparam[0:0] _e_2414 = 1;
     (* src = "hello.spade:80,29" *)
     logic _e_2415;
-    logic _e_3584;
+    logic _e_3562;
     localparam[0:0] _e_2416 = 0;
     (* src = "hello.spade:80,29" *)
     logic \pressed_req_valid ;
@@ -1638,16 +1638,16 @@ module \hello::hello_regs  (
     assign _e_2201 = \bus [93:31];
     
     assign \w  = _e_2204[61:0];
-    assign _e_3475 = _e_2204[62] == 1'd1;
-    assign _e_3477 = _e_3475 && _e_3476;
+    assign _e_3425 = _e_2204[62] == 1'd1;
+    assign _e_3427 = _e_3425 && _e_3426;
     assign _e_2207 = \w [61:32];
     assign _e_2209 = \w [31:0];
     assign _e_2205 = {_e_2206, _e_2207, _e_2209};
     
-    assign _e_3480 = _e_2211[62] == 1'd0;
+    assign _e_3430 = _e_2211[62] == 1'd0;
     assign _e_2212 = {_e_2213, _e_2214, _e_2215};
     always_comb begin
-        priority casez ({_e_3477, _e_3480})
+        priority casez ({_e_3427, _e_3430})
             2'b1?: _e_2200 = _e_2205;
             2'b01: _e_2200 = _e_2212;
             2'b?: _e_2200 = 63'dx;
@@ -1661,14 +1661,14 @@ module \hello::hello_regs  (
     assign _e_2221 = \bus [30:0];
     
     assign \word  = _e_2224[29:0];
-    assign _e_3493 = _e_2224[30] == 1'd1;
-    assign _e_3495 = _e_3493 && _e_3494;
+    assign _e_3433 = _e_2224[30] == 1'd1;
+    assign _e_3435 = _e_3433 && _e_3434;
     assign _e_2225 = {_e_2226, \word };
     
-    assign _e_3498 = _e_2228[30] == 1'd0;
+    assign _e_3438 = _e_2228[30] == 1'd0;
     assign _e_2229 = {_e_2230, _e_2231};
     always_comb begin
-        priority casez ({_e_3495, _e_3498})
+        priority casez ({_e_3435, _e_3438})
             2'b1?: _e_2220 = _e_2225;
             2'b01: _e_2220 = _e_2229;
             2'b?: _e_2220 = 31'dx;
@@ -1680,12 +1680,12 @@ module \hello::hello_regs  (
     assign \rd_word  = _e_2220[29:0];
     (* src = "hello.spade:46,28" *)
     
-    \core::ops::impl#93::wrapping_sub[2122]  \wrapping_sub_0 (.self_i(\add_one_req_head ), .rhs_i(\add_one_req_tail ), .output__(_e_2236));
+    \core::ops::impl#93::wrapping_sub[2117]  \wrapping_sub_0 (.self_i(\add_one_req_head ), .rhs_i(\add_one_req_tail ), .output__(_e_2236));
     assign \add_one_req_room  = _e_2236 < _e_2239;
     
-    assign _e_3512 = _e_3513_mut;
-    assign \add_one_req_ack  = {_e_3512};
-    assign {_e_3513_mut} = \add_one_req_ack_mut ;
+    assign _e_3439 = _e_3440_mut;
+    assign \add_one_req_ack  = {_e_3439};
+    assign {_e_3440_mut} = \add_one_req_ack_mut ;
     assign \add_one_req_ready  = \add_one_req_ack ;
     assign _e_2249 = \wr_word  == _e_2251;
     assign _e_4015 = {\wr };
@@ -1710,15 +1710,15 @@ module \hello::hello_regs  (
     assign _e_2258 = \add_one_req_push  ? _e_2261 : _e_2267;
     (* src = "hello.spade:54,5" *)
     
-    \core::mem::impl#73::write[2126]  \write_0 (.self_o(\add_one_req_wrp_mut ), .clk_i(\clk ), .req_i(_e_2258));
+    \core::mem::impl#73::write[2124]  \write_0 (.self_o(\add_one_req_wrp_mut ), .clk_i(\clk ), .req_i(_e_2258));
     assign _e_2272 = \add_one_req_tail [1:0];
     assign _e_2271 = {1'd1, _e_2272};
     (* src = "hello.spade:55,39" *)
     
-    \core::mem::impl#70::read_comb[2128]  \read_comb_0 (.self_i(\add_one_req_rdp ), .self_o(\add_one_req_rdp_mut ), .req_i(_e_2271), .output__(_e_2269));
+    \core::mem::impl#70::read_comb[2125]  \read_comb_0 (.self_i(\add_one_req_rdp ), .self_o(\add_one_req_rdp_mut ), .req_i(_e_2271), .output__(_e_2269));
     (* src = "hello.spade:55,39" *)
     
-    \std::option::impl#41::unwrap_or[2129]  \unwrap_or_0 (.self_i(_e_2269), .default_i(_e_2274), .output__(\add_one_req_entry ));
+    \std::option::impl#41::unwrap_or[2126]  \unwrap_or_0 (.self_i(_e_2269), .default_i(_e_2274), .output__(\add_one_req_entry ));
     assign _e_2277 = \add_one_req_head  != \add_one_req_tail ;
     assign _e_4049 = {_e_2277};
     assign _e_4050 = {\add_one_req_ready };
@@ -1726,7 +1726,7 @@ module \hello::hello_regs  (
     assign \add_one_req_pop  = _e_4048;
     (* src = "hello.spade:57,90" *)
     
-    \core::ops::impl#91::wrapping_add[2131]  \wrapping_add_0 (.self_i(\add_one_req_head ), .rhs_i(_e_2292), .output__(_e_2290));
+    \core::ops::impl#91::wrapping_add[2129]  \wrapping_add_0 (.self_i(\add_one_req_head ), .rhs_i(_e_2292), .output__(_e_2290));
     assign _e_2287 = \add_one_req_push  ? _e_2290 : \add_one_req_head ;
     initial begin
         \add_one_req_head  = 'b00000000000000000000000000000000;
@@ -1741,7 +1741,7 @@ module \hello::hello_regs  (
     end
     (* src = "hello.spade:58,89" *)
     
-    \core::ops::impl#91::wrapping_add[2131]  \wrapping_add_1 (.self_i(\add_one_req_tail ), .rhs_i(_e_2305), .output__(_e_2303));
+    \core::ops::impl#91::wrapping_add[2129]  \wrapping_add_1 (.self_i(\add_one_req_tail ), .rhs_i(_e_2305), .output__(_e_2303));
     assign _e_2300 = \add_one_req_pop  ? _e_2303 : \add_one_req_tail ;
     initial begin
         \add_one_req_tail  = 'b00000000000000000000000000000000;
@@ -1756,21 +1756,21 @@ module \hello::hello_regs  (
     end
     (* src = "hello.spade:60,29" *)
     
-    \core::ops::impl#93::wrapping_sub[2122]  \wrapping_sub_1 (.self_i(\add_one_resp_head ), .rhs_i(\add_one_resp_tail ), .output__(_e_2309));
+    \core::ops::impl#93::wrapping_sub[2117]  \wrapping_sub_1 (.self_i(\add_one_resp_head ), .rhs_i(\add_one_resp_tail ), .output__(_e_2309));
     assign \add_one_resp_room  = _e_2309 < _e_2312;
     
-    assign _e_3527 = _e_3528_mut;
-    assign \add_one_resp_write  = {_e_3527};
-    assign {_e_3528_mut} = \add_one_resp_write_mut ;
+    assign _e_3491 = _e_3492_mut;
+    assign \add_one_resp_write  = {_e_3491};
+    assign {_e_3492_mut} = \add_one_resp_write_mut ;
     assign _e_2317 = \add_one_resp_write [32:0];
     
     assign \_  = _e_2320[31:0];
-    assign _e_3531 = _e_2320[32] == 1'd1;
-    assign _e_3533 = _e_3531 && _e_3532;
+    assign _e_3495 = _e_2320[32] == 1'd1;
+    assign _e_3497 = _e_3495 && _e_3496;
     
-    assign _e_3536 = _e_2322[32] == 1'd0;
+    assign _e_3500 = _e_2322[32] == 1'd0;
     always_comb begin
-        priority casez ({_e_3533, _e_3536})
+        priority casez ({_e_3497, _e_3500})
             2'b1?: \add_one_resp_valid  = _e_2321;
             2'b01: \add_one_resp_valid  = _e_2323;
             2'b?: \add_one_resp_valid  = 1'dx;
@@ -1796,10 +1796,10 @@ module \hello::hello_regs  (
     assign _e_2335 = _e_4114;
     (* src = "hello.spade:68,50" *)
     
-    \core::ops::impl#93::wrapping_sub[2122]  \wrapping_sub_2 (.self_i(\wr_data ), .rhs_i(\add_one_resp_tail ), .output__(_e_2341));
+    \core::ops::impl#93::wrapping_sub[2117]  \wrapping_sub_2 (.self_i(\wr_data ), .rhs_i(\add_one_resp_tail ), .output__(_e_2341));
     (* src = "hello.spade:68,93" *)
     
-    \core::ops::impl#93::wrapping_sub[2122]  \wrapping_sub_3 (.self_i(\add_one_resp_head ), .rhs_i(\add_one_resp_tail ), .output__(_e_2344));
+    \core::ops::impl#93::wrapping_sub[2117]  \wrapping_sub_3 (.self_i(\add_one_resp_head ), .rhs_i(\add_one_resp_tail ), .output__(_e_2344));
     assign _e_2340 = _e_2341 <= _e_2344;
     assign _e_4135 = {_e_2335};
     assign _e_4136 = {_e_2340};
@@ -1807,7 +1807,7 @@ module \hello::hello_regs  (
     assign \add_one_resp_pop  = _e_4134;
     (* src = "hello.spade:69,92" *)
     
-    \core::ops::impl#91::wrapping_add[2131]  \wrapping_add_2 (.self_i(\add_one_resp_head ), .rhs_i(_e_2358), .output__(_e_2356));
+    \core::ops::impl#91::wrapping_add[2129]  \wrapping_add_2 (.self_i(\add_one_resp_head ), .rhs_i(_e_2358), .output__(_e_2356));
     assign _e_2353 = \add_one_resp_push  ? _e_2356 : \add_one_resp_head ;
     initial begin
         \add_one_resp_head  = 'b00000000000000000000000000000000;
@@ -1843,12 +1843,12 @@ module \hello::hello_regs  (
     assign _e_2384 = \add_one_resp_write [32:0];
     
     assign \add_one_resp_x  = _e_2387[31:0];
-    assign _e_3569 = _e_2387[32] == 1'd1;
-    assign _e_3571 = _e_3569 && _e_3570;
+    assign _e_3534 = _e_2387[32] == 1'd1;
+    assign _e_3536 = _e_3534 && _e_3535;
     
-    assign _e_3574 = _e_2389[32] == 1'd0;
+    assign _e_3539 = _e_2389[32] == 1'd0;
     always_comb begin
-        priority casez ({_e_3571, _e_3574})
+        priority casez ({_e_3536, _e_3539})
             2'b1?: _e_2383 = \add_one_resp_x ;
             2'b01: _e_2383 = _e_2390;
             2'b?: _e_2383 = 32'dx;
@@ -1862,32 +1862,32 @@ module \hello::hello_regs  (
     assign _e_2376 = \add_one_resp_push  ? _e_2379 : _e_2392;
     (* src = "hello.spade:75,5" *)
     
-    \core::mem::impl#73::write[2126]  \write_1 (.self_o(\add_one_resp_wrp_mut ), .clk_i(\clk ), .req_i(_e_2376));
+    \core::mem::impl#73::write[2124]  \write_1 (.self_o(\add_one_resp_wrp_mut ), .clk_i(\clk ), .req_i(_e_2376));
     assign _e_2397 = \add_one_resp_tail [1:0];
     assign _e_2396 = {1'd1, _e_2397};
     (* src = "hello.spade:76,40" *)
     
-    \core::mem::impl#70::read_comb[2128]  \read_comb_1 (.self_i(\add_one_resp_rdp ), .self_o(\add_one_resp_rdp_mut ), .req_i(_e_2396), .output__(_e_2394));
+    \core::mem::impl#70::read_comb[2125]  \read_comb_1 (.self_i(\add_one_resp_rdp ), .self_o(\add_one_resp_rdp_mut ), .req_i(_e_2396), .output__(_e_2394));
     (* src = "hello.spade:76,40" *)
     
-    \std::option::impl#41::unwrap_or[2129]  \unwrap_or_1 (.self_i(_e_2394), .default_i(_e_2399), .output__(\add_one_resp_entry ));
+    \std::option::impl#41::unwrap_or[2126]  \unwrap_or_1 (.self_i(_e_2394), .default_i(_e_2399), .output__(\add_one_resp_entry ));
     (* src = "hello.spade:78,28" *)
     
-    \core::ops::impl#93::wrapping_sub[2122]  \wrapping_sub_4 (.self_i(\pressed_req_head ), .rhs_i(\pressed_req_tail ), .output__(_e_2402));
+    \core::ops::impl#93::wrapping_sub[2117]  \wrapping_sub_4 (.self_i(\pressed_req_head ), .rhs_i(\pressed_req_tail ), .output__(_e_2402));
     assign \pressed_req_room  = _e_2402 < _e_2405;
     
-    assign _e_3575 = _e_3576_mut;
-    assign \pressed_req_write  = {_e_3575};
-    assign {_e_3576_mut} = \pressed_req_write_mut ;
+    assign _e_3551 = _e_3552_mut;
+    assign \pressed_req_write  = {_e_3551};
+    assign {_e_3552_mut} = \pressed_req_write_mut ;
     assign _e_2410 = \pressed_req_write ;
     
     
-    assign _e_3579 = _e_2413 == 1'd1;
-    assign _e_3581 = _e_3579 && _e_3580;
+    assign _e_3555 = _e_2413 == 1'd1;
+    assign _e_3559 = _e_3555 && _e_3556;
     
-    assign _e_3584 = _e_2415 == 1'd0;
+    assign _e_3562 = _e_2415 == 1'd0;
     always_comb begin
-        priority casez ({_e_3581, _e_3584})
+        priority casez ({_e_3559, _e_3562})
             2'b1?: \pressed_req_valid  = _e_2414;
             2'b01: \pressed_req_valid  = _e_2416;
             2'b?: \pressed_req_valid  = 1'dx;
@@ -1913,10 +1913,10 @@ module \hello::hello_regs  (
     assign _e_2428 = _e_4200;
     (* src = "hello.spade:86,49" *)
     
-    \core::ops::impl#93::wrapping_sub[2122]  \wrapping_sub_5 (.self_i(\wr_data ), .rhs_i(\pressed_req_tail ), .output__(_e_2434));
+    \core::ops::impl#93::wrapping_sub[2117]  \wrapping_sub_5 (.self_i(\wr_data ), .rhs_i(\pressed_req_tail ), .output__(_e_2434));
     (* src = "hello.spade:86,91" *)
     
-    \core::ops::impl#93::wrapping_sub[2122]  \wrapping_sub_6 (.self_i(\pressed_req_head ), .rhs_i(\pressed_req_tail ), .output__(_e_2437));
+    \core::ops::impl#93::wrapping_sub[2117]  \wrapping_sub_6 (.self_i(\pressed_req_head ), .rhs_i(\pressed_req_tail ), .output__(_e_2437));
     assign _e_2433 = _e_2434 <= _e_2437;
     assign _e_4221 = {_e_2428};
     assign _e_4222 = {_e_2433};
@@ -1924,7 +1924,7 @@ module \hello::hello_regs  (
     assign \pressed_req_pop  = _e_4220;
     (* src = "hello.spade:87,90" *)
     
-    \core::ops::impl#91::wrapping_add[2131]  \wrapping_add_3 (.self_i(\pressed_req_head ), .rhs_i(_e_2451), .output__(_e_2449));
+    \core::ops::impl#91::wrapping_add[2129]  \wrapping_add_3 (.self_i(\pressed_req_head ), .rhs_i(_e_2451), .output__(_e_2449));
     assign _e_2446 = \pressed_req_push  ? _e_2449 : \pressed_req_head ;
     initial begin
         \pressed_req_head  = 'b00000000000000000000000000000000;
@@ -2094,12 +2094,12 @@ module \std::default::impl#19::default  (
 endmodule
 
 
-module \std::option::impl#41::unwrap_or[2129]  (
+module \std::option::impl#41::unwrap_or[2126]  (
         input[32:0] self_i,
         input[31:0] default_i,
         output[31:0] output__
     );
-    `COCOTB_CODE( std::option::impl#41::unwrap_or[2129] )
+    `COCOTB_CODE( std::option::impl#41::unwrap_or[2126] )
     logic[32:0] \self ;
     assign \self  = self_i;
     logic[31:0] \default ;
@@ -2108,22 +2108,22 @@ module \std::option::impl#41::unwrap_or[2129]  (
     logic[32:0] _e_1521;
     (* src = "<compiler dir>/stdlib/option.spade:74,13" *)
     logic[31:0] \val ;
-    logic _e_3561;
-    localparam[0:0] _e_3562 = 1;
-    logic _e_3563;
+    logic _e_3503;
+    localparam[0:0] _e_3504 = 1;
+    logic _e_3505;
     (* src = "<compiler dir>/stdlib/option.spade:73,9" *)
     logic[32:0] _e_1523;
-    logic _e_3566;
+    logic _e_3508;
     (* src = "<compiler dir>/stdlib/option.spade:73,9" *)
     logic[31:0] _e_1518;
     
     assign \val  = _e_1521[31:0];
-    assign _e_3561 = _e_1521[32] == 1'd1;
-    assign _e_3563 = _e_3561 && _e_3562;
+    assign _e_3503 = _e_1521[32] == 1'd1;
+    assign _e_3505 = _e_3503 && _e_3504;
     
-    assign _e_3566 = _e_1523[32] == 1'd0;
+    assign _e_3508 = _e_1523[32] == 1'd0;
     always_comb begin
-        priority casez ({_e_3563, _e_3566})
+        priority casez ({_e_3505, _e_3508})
             2'b1?: _e_1518 = \val ;
             2'b01: _e_1518 = \default ;
             2'b?: _e_1518 = 32'dx;
@@ -2135,12 +2135,12 @@ module \std::option::impl#41::unwrap_or[2129]  (
 endmodule
 
 
-module \core::mem::impl#70::read_comb[2128]  (
+module \core::mem::impl#70::read_comb[2125]  (
         input[32:0] self_i, output[3:0] self_o,
         input[2:0] req_i,
         output[32:0] output__
     );
-    `COCOTB_CODE( core::mem::impl#70::read_comb[2128] )
+    `COCOTB_CODE( core::mem::impl#70::read_comb[2125] )
     logic[32:0] \self ;
     assign \self  = self_i;
     logic[3:0] \self_mut ;
@@ -2167,12 +2167,12 @@ module \core::mem::impl#70::read_comb[2128]  (
 endmodule
 
 
-module \core::mem::impl#73::write[2126]  (
+module \core::mem::impl#73::write[2124]  (
         output[35:0] self_o,
         input clk_i,
         input[34:0] req_i
     );
-    `COCOTB_CODE( core::mem::impl#73::write[2126] )
+    `COCOTB_CODE( core::mem::impl#73::write[2124] )
     logic[35:0] \self_mut ;
     assign self_o = \self_mut ;
     logic \clk ;
@@ -2193,12 +2193,12 @@ module \core::mem::impl#73::write[2126]  (
 endmodule
 
 
-module \core::ops::impl#91::wrapping_add[2131]  (
+module \core::ops::impl#91::wrapping_add[2129]  (
         input[31:0] self_i,
         input[31:0] rhs_i,
         output[31:0] output__
     );
-    `COCOTB_CODE( core::ops::impl#91::wrapping_add[2131] )
+    `COCOTB_CODE( core::ops::impl#91::wrapping_add[2129] )
     logic[31:0] \self ;
     assign \self  = self_i;
     logic[31:0] \rhs ;
@@ -2217,12 +2217,12 @@ module \core::ops::impl#91::wrapping_add[2131]  (
 endmodule
 
 
-module \core::ops::impl#93::wrapping_sub[2122]  (
+module \core::ops::impl#93::wrapping_sub[2117]  (
         input[31:0] self_i,
         input[31:0] rhs_i,
         output[31:0] output__
     );
-    `COCOTB_CODE( core::ops::impl#93::wrapping_sub[2122] )
+    `COCOTB_CODE( core::ops::impl#93::wrapping_sub[2117] )
     logic[31:0] \self ;
     assign \self  = self_i;
     logic[31:0] \rhs ;

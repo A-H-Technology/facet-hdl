@@ -78,6 +78,28 @@ impl SimBuilder {
         self
     }
 
+    /// VHDL sources, elaborated from `top`: ghdl synthesizes them to one
+    /// Verilog file in the workdir, since iverilog doesn't read VHDL.
+    /// Components with no VHDL entity (a `<boundary>_core`) stay instances,
+    /// for the Verilog sources to fill.
+    pub fn vhdl<P: AsRef<Path>>(mut self, paths: impl IntoIterator<Item = P>, top: &str) -> io::Result<Self> {
+        std::fs::create_dir_all(&self.workdir)?;
+        let out = Command::new("ghdl")
+            .current_dir(&self.workdir)
+            .args(["--synth", "--std=08", "--out=verilog", "-Wno-binding"])
+            .args(paths.into_iter().map(|p| p.as_ref().to_owned()))
+            .args(["-e", top])
+            .output()
+            .map_err(|e| io::Error::other(format!("ghdl (in the dev shell): {e}")))?;
+        if !out.status.success() {
+            return Err(io::Error::other(format!("ghdl failed:\n{}", String::from_utf8_lossy(&out.stderr))));
+        }
+        let v = self.workdir.join(format!("{top}.vhdl.v"));
+        std::fs::write(&v, out.stdout)?;
+        self.sources.push(v);
+        Ok(self)
+    }
+
     /// The top has an `irq` output; the transport then offers it as an
     /// [`Interrupt`].
     pub fn irq(mut self) -> Self {

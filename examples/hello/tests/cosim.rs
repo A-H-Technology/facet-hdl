@@ -4,10 +4,9 @@
 
 use facet_hdl::{bind, block_on_timeout};
 use facet_hdl_iverilog::Sim;
-use facet_hdl_spade::{FLAT_AXI_GLUE, FLAT_AXI_PORTS, Source, Spade};
+use facet_hdl_spade::{FLAT_AXI_GLUE, FLAT_AXI_PORTS, Source, Spade, vhdl_flat_axi_glue, vhdl_flat_axi_ports, vhdl_library};
 use hello::hello::Hello;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{Duration, Instant};
 
 fn hdl() -> PathBuf {
@@ -127,26 +126,65 @@ fn the_same_fabric_in_verilog() {
     exercise(hdl_sim("hello-verilog", "hello_fabric_v", |_| vec![hdl().join("hello_fabric.v")]));
 }
 
-/// ghdl turns the VHDL into Verilog (leaving `hello_core` as an instance), so
-/// one simulator runs it all.
+/// A VHDL top (flat AXI ports, the stand-in button) around
+/// `hello_fabric.vhd`; ghdl turns it all into Verilog so iverilog runs it.
 #[test]
 fn the_same_fabric_in_vhdl() {
-    exercise(hdl_sim("hello-vhdl", "hello_fabric_vhdl", |work| {
-        let pkg = work.join("hello_core_pkg.vhd");
-        std::fs::write(&pkg, &Spade::of::<Hello>().unwrap().core_vhdl).unwrap();
-        let out = Command::new("ghdl")
-            .current_dir(work)
-            .args(["--synth", "--std=08", "--out=verilog", "-Wno-binding"])
-            .arg(&pkg)
-            .arg(hdl().join("hello_fabric.vhd"))
-            .args(["-e", "hello_fabric_vhdl"])
-            .output()
-            .expect("ghdl (in the dev shell)");
-        assert!(out.status.success(), "ghdl: {}", String::from_utf8_lossy(&out.stderr));
-        let v = work.join("hello_fabric_vhdl.v");
-        std::fs::write(&v, out.stdout).unwrap();
-        vec![v]
-    }));
+    let work = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hello-vhdl");
+    std::fs::create_dir_all(&work).unwrap();
+    let spade = Spade::of::<Hello>().unwrap();
+    std::fs::write(work.join("hello_core.sv"), spade.compile_core().unwrap_or_else(|e| panic!("{e}"))).unwrap();
+    std::fs::write(work.join("facet_hdl_pkg.vhd"), vhdl_library()).unwrap();
+    std::fs::write(work.join("hello.vhd"), spade.vhdl().unwrap()).unwrap();
+    let top = format!(
+        r#"library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+use work.facet_hdl_pkg.all;
+
+entity hello_top is
+  port (
+    clk, rst : in std_logic;
+{ports}    irq : out std_logic
+  );
+end entity;
+
+architecture sim of hello_top is
+  signal axi_in  : axi_in_t;
+  signal axi_out : axi_out_t;
+  signal cycle   : unsigned(31 downto 0);
+  signal button  : std_logic;
+begin
+{glue}
+  process (clk) begin
+    if rising_edge(clk) then
+      cycle <= (others => '0') when rst = '1' else cycle + 1;
+    end if;
+  end process;
+  button <= '1' when cycle >= 200 and cycle < 220 else '0';
+  fabric : entity work.hello_fabric_vhdl port map (clk, rst, button, axi_in, axi_out, irq);
+end architecture;
+"#,
+        ports = vhdl_flat_axi_ports(),
+        glue = vhdl_flat_axi_glue(),
+    );
+    std::fs::write(work.join("hello_top.vhd"), top).unwrap();
+    let sim = Sim::builder(&work, "hello_top")
+        .source(work.join("hello_core.sv"))
+        .vhdl(
+            [
+                work.join("facet_hdl_pkg.vhd"),
+                work.join("hello.vhd"),
+                hdl().join("hello_fabric.vhd"),
+                work.join("hello_top.vhd"),
+            ],
+            "hello_top",
+        )
+        .unwrap()
+        .irq()
+        .build()
+        .unwrap();
+    exercise(sim);
 }
 
 #[test]
@@ -156,7 +194,8 @@ fn checked_in_spade_matches_the_declaration() {
     let mut files = spade.write_to(&fresh).unwrap().to_vec();
     for (name, text) in [
         ("hello_core.sv", spade.compile_core().unwrap()),
-        ("hello_core_pkg.vhd", spade.core_vhdl.clone()),
+        ("hello.vhd", spade.vhdl().unwrap()),
+        ("facet_hdl_pkg.vhd", vhdl_library()),
     ] {
         std::fs::write(fresh.join(name), text).unwrap();
         files.push(fresh.join(name));

@@ -44,39 +44,28 @@ pub entity hello_fabric(clk: clock, rst: bool, axi: facet_hdl::AxiIn, button: bo
 }
 ```
 
-Or in VHDL (or Verilog), if Spade isn't your thing. The generator also emits
-`hello_core.sv`, the same register file with flat ports, and
-`hello_core_pkg.vhd`, which declares it for VHDL. Drop both into your Vivado
-or Quartus project. Each call is a valid/ready stream:
+Or in VHDL, if Spade isn't your thing. The generator also writes
+`hello.vhd`: a record type per Rust type (`add_one_args_t` with
+`x : unsigned(31 downto 0)`), and a `hello_regs` entity whose ports are two
+records, `to_fabric` (what the fabric reads) and `from_fabric` (what it
+drives). Each call is a valid/ready pair:
 
 ```vhdl
-use work.hello_core_pkg.all;
+regs : entity work.hello_regs port map (clk, rst, axi_in, axi_out, irq, to_fabric => t, from_fabric => f);
 
-architecture rtl of hello_fabric_vhdl is
-  signal call_valid, answer_ready, was_down, press : std_logic;
-  signal call_x, answer : std_logic_vector(31 downto 0);
-begin
-  -- add_one: answered in the cycle Rust's call arrives.
-  answer <= std_logic_vector(unsigned(call_x) + 1);
+-- add_one: answered in the cycle Rust's call arrives.
+f.add_one_resp       <= t.add_one_req.x + 1;
+f.add_one_resp_valid <= t.add_one_req_valid;
+f.add_one_req_ready  <= t.add_one_resp_ready;
 
-  -- pressed: one call per press.
-  process (clk) begin
-    if rising_edge(clk) then was_down <= button and not rst; end if;
-  end process;
-  press <= button and not was_down;
-
-  core : hello_core port map (
-    clk => clk, rst => rst, irq => irq,
-    -- s_axi_* => s_axi_*: the bridge, wired straight through
-    add_one_req_valid  => call_valid, add_one_req_data  => call_x, add_one_req_ready  => answer_ready,
-    add_one_resp_valid => call_valid, add_one_resp_data => answer, add_one_resp_ready => answer_ready,
-    pressed_req_valid  => press,      pressed_req_ready  => open
-  );
-end architecture;
+-- pressed: one call per press.
+f.pressed_req_valid  <= button and not was_down;
 ```
 
-The whole file is `examples/hello/hdl/hello_fabric.vhd`, and there's a
-Verilog one next to it.
+That's most of `examples/hello/hdl/hello_fabric.vhd`. Add `hello.vhd`,
+`facet_hdl_pkg.vhd` and `hello_core.sv` (the register file, compiled from
+Spade) to your Vivado or Quartus project. There's a plain Verilog version
+too, on the flat `hello_core`.
 
 And the HPS side (`src/bin/hello.rs`) is:
 
@@ -130,16 +119,24 @@ inv Option<T>, full: bool }` for a fabric -> host one.
   the top level. The Spade compiler runs in-process (`Spade::compile`),
   pinned to v0.21.0, so there's no swim step. Its output is SystemVerilog,
   which chipsmith reads.
-- **Verilog or VHDL** instead of Spade: `<boundary>_core` is the same
-  register file with flat ports, compiled to SystemVerilog
-  (`Spade::compile_core`), plus a VHDL package declaring it as a component
-  (`Spade::core_vhdl`). Each queue is a valid/ready stream (`<port>_valid`,
-  `<port>_data`, `<port>_ready`; an entry moves on a clock edge where both
-  are high), each register a plain vector, and payloads are the packed bits
-  of the [wire format](#wire-format). hello ships them checked in
-  (`hdl/generated/hello_core.sv`, `hello_core_pkg.vhd`), so that side needs
-  no Rust, and has its fabric in both languages too
-  (`hdl/hello_fabric.v`, `hdl/hello_fabric.vhd`).
+- **VHDL** instead of Spade (`Spade::vhdl`): a VHDL type per Rust type
+  (records, enumerations, arrays, `unsigned`/`signed`, `std_logic`; a
+  tagged type like `Option` is a record of `tag` plus one field per
+  variant's payload), `pack_*`/`unpack_*` functions mirroring the codec, and
+  a `<module>_regs` entity with the bus as `facet_hdl_pkg`'s `axi_in_t`/
+  `axi_out_t` and the ports as `to_fabric`/`from_fabric` records. A queue
+  `q` is `q_valid`, `q` and `q_ready` across the two; a register is a field
+  plus `_written` for one coming from the host. `vhdl_flat_axi_ports`/
+  `vhdl_flat_axi_glue` write a top level with flat `s_axi_*` signals. Names
+  VHDL can't take (reserved words like `next` or `range`, ones differing
+  only in case) fail `Spade::vhdl` with the culprit named; Spade generation
+  doesn't mind them.
+- **Verilog** instead of Spade: `<module>_core` (`Spade::compile_core`) is
+  the register file with flat ports, the same streams as plain wires
+  (`q_valid`, `q_data`, `q_ready`; a register `r_data`), payloads packed as
+  in the [wire format](#wire-format). `<module>_regs` wraps it for VHDL.
+  hello ships all of it checked in under `hdl/generated/`, so that side
+  needs no Rust.
 - **Host handles** (`facet-hdl`): `bind::<Adder>(transport)` returns that same
   struct with live handles: `b.leds.write(&ctl)?`, `b.status.read()?`. There's
   no `read` on a `ToFabric` and no `write` on a `FromFabric`.
@@ -356,11 +353,16 @@ watching it fail.
   the edge detection (more than one call per press). The checked-in
   `hdl/generated/` has to match the declaration (for `hello_core.sv`, up
   to the numbering of Spade's internal names, which changes run to run).
-- The same hello co-sim against `hello_fabric.v` and against
-  `hello_fabric.vhd`, each on the generated `hello_core`. ghdl
-  (`--synth --out=verilog`) turns the VHDL into Verilog so iverilog runs it
-  all. A VHDL fabric answering `x + 2` fails with 43. Neither has been on a
-  board: the board tops still use the Spade fabric.
+- The same hello co-sim against `hello_fabric.v` (on `hello_core`) and
+  `hello_fabric.vhd` (on `hello_regs`). ghdl (`--synth --out=verilog`)
+  turns the VHDL into Verilog so iverilog runs it all
+  (`SimBuilder::vhdl`). Neither has been on a board: the board tops still
+  use the Spade fabric.
+- VHDL echo co-sim: the echo test's every-type value round-trips through
+  the generated VHDL records, 200 random values plus a golden one written as
+  a VHDL aggregate (`vhdl_literal`) that checks `pack_*` and `unpack_*`
+  separately. An enum packed in reverse order fails the packing check; bools
+  unpacked inverted fail the unpacking one.
 - Register co-sim (an adder over plain registers): bind/fingerprint, 3-word
   signed sums, a snapshotted 64-bit cycle counter, a 200-cycle adder showing
   write-then-read returning a stale value and the generation-counter wait

@@ -6,7 +6,9 @@
 use facet::Facet;
 use facet_hdl::{FromFabric, ToFabric, bind};
 use facet_hdl_iverilog::Sim;
-use facet_hdl_spade::{FLAT_AXI_GLUE, FLAT_AXI_PORTS, Spade, literal};
+use facet_hdl_spade::{
+    FLAT_AXI_GLUE, FLAT_AXI_PORTS, Spade, literal, vhdl_flat_axi_glue, vhdl_flat_axi_ports, vhdl_library, vhdl_literal,
+};
 use std::path::Path;
 
 #[derive(Facet, Debug, Clone, Copy, PartialEq)]
@@ -175,5 +177,76 @@ entity echo_top(
             !echo.matches_golden.read().unwrap(),
             "iteration {i} isn't the golden value"
         );
+    }
+}
+
+/// The same for the VHDL codec: a VHDL fabric wires `input` to `output`
+/// through the generated records, `golden` is a VHDL aggregate built from the
+/// Rust value (so reading it checks `pack_*` alone), and `matches_golden`
+/// compares the unpacked record with that aggregate (`unpack_*` alone).
+#[test]
+fn rust_and_vhdl_agree_on_every_bit() {
+    let golden = Rng(SEED ^ 0xFFFF).everything();
+    let spade = Spade::of::<Echo>().unwrap();
+    let work = Path::new(env!("CARGO_TARGET_TMPDIR")).join("vhdl-echo");
+    std::fs::create_dir_all(&work).unwrap();
+    std::fs::write(work.join("echo_core.sv"), spade.compile_core().unwrap_or_else(|e| panic!("{e}"))).unwrap();
+    std::fs::write(work.join("facet_hdl_pkg.vhd"), vhdl_library()).unwrap();
+    std::fs::write(work.join("echo.vhd"), spade.vhdl().unwrap()).unwrap();
+    let top = format!(
+        r#"library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+use work.facet_hdl_pkg.all;
+use work.echo_pkg.all;
+
+entity echo_top is
+  port (
+    clk, rst : in std_logic;
+{ports}    irq : out std_logic
+  );
+end entity;
+
+architecture sim of echo_top is
+  signal axi_in  : axi_in_t;
+  signal axi_out : axi_out_t;
+  signal t       : echo_to_fabric_t;
+  signal f       : echo_from_fabric_t;
+  constant golden : everything_t := {golden};
+begin
+{glue}
+  regs : entity work.echo_regs port map (clk, rst, axi_in, axi_out, irq, t, f);
+  f.output         <= t.input;
+  f.golden         <= golden;
+  f.matches_golden <= '1' when t.input = golden else '0';
+end architecture;
+"#,
+        ports = vhdl_flat_axi_ports(),
+        glue = vhdl_flat_axi_glue(),
+        golden = vhdl_literal(&golden).unwrap(),
+    );
+    std::fs::write(work.join("echo_top.vhd"), top).unwrap();
+    let sim = Sim::builder(&work, "echo_top")
+        .source(work.join("echo_core.sv"))
+        .vhdl(
+            [work.join("facet_hdl_pkg.vhd"), work.join("echo.vhd"), work.join("echo_top.vhd")],
+            "echo_top",
+        )
+        .unwrap_or_else(|e| panic!("{e}"))
+        .build()
+        .unwrap();
+    let (transport, _clk) = sim.spawn().unwrap();
+    let echo: Echo = bind(transport).unwrap();
+
+    assert_eq!(echo.golden.read().unwrap(), golden, "VHDL pack disagrees with the Rust decoder");
+    echo.input.write(&golden).unwrap();
+    assert!(echo.matches_golden.read().unwrap(), "VHDL unpack disagrees with the Rust encoder");
+
+    let mut rng = Rng(SEED);
+    for i in 0..200 {
+        let v = rng.everything();
+        echo.input.write(&v).unwrap();
+        assert_eq!(echo.output.read().unwrap(), v, "iteration {i}");
+        assert!(!echo.matches_golden.read().unwrap(), "iteration {i} isn't the golden value");
     }
 }
