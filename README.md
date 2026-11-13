@@ -44,6 +44,40 @@ pub entity hello_fabric(clk: clock, rst: bool, axi: facet_hdl::AxiIn, button: bo
 }
 ```
 
+Or in VHDL (or Verilog), if Spade isn't your thing. The generator also emits
+`hello_core.sv`, the same register file with flat ports, and
+`hello_core_pkg.vhd`, which declares it for VHDL. Drop both into your Vivado
+or Quartus project. Each call is a valid/ready stream:
+
+```vhdl
+use work.hello_core_pkg.all;
+
+architecture rtl of hello_fabric_vhdl is
+  signal call_valid, answer_ready, was_down, press : std_logic;
+  signal call_x, answer : std_logic_vector(31 downto 0);
+begin
+  -- add_one: answered in the cycle Rust's call arrives.
+  answer <= std_logic_vector(unsigned(call_x) + 1);
+
+  -- pressed: one call per press.
+  process (clk) begin
+    if rising_edge(clk) then was_down <= button and not rst; end if;
+  end process;
+  press <= button and not was_down;
+
+  core : hello_core port map (
+    clk => clk, rst => rst, irq => irq,
+    -- s_axi_* => s_axi_*: the bridge, wired straight through
+    add_one_req_valid  => call_valid, add_one_req_data  => call_x, add_one_req_ready  => answer_ready,
+    add_one_resp_valid => call_valid, add_one_resp_data => answer, add_one_resp_ready => answer_ready,
+    pressed_req_valid  => press,      pressed_req_ready  => open
+  );
+end architecture;
+```
+
+The whole file is `examples/hello/hdl/hello_fabric.vhd`, and there's a
+Verilog one next to it.
+
 And the HPS side (`src/bin/hello.rs`) is:
 
 ```rust
