@@ -1,0 +1,32 @@
+// hello on the original Zybo: the fabric behind the Zynq's M_AXI_GP0, BTN0
+// as the button. The Verilog shell around it (zybo/zybo_top.v) owns the PS7,
+// the clock and the reset, and puts irq on IRQ_F2P[0].
+
+#[no_mangle(all)]
+entity hello_zybo(
+    clk: clock,
+    rst: bool,
+    btn0: bool,
+    s_axi_awid: uint<12>, s_axi_awaddr: uint<32>, s_axi_awlen: uint<4>, s_axi_awvalid: bool, s_axi_awready: inv bool,
+    s_axi_wdata: uint<32>, s_axi_wvalid: bool, s_axi_wready: inv bool,
+    s_axi_bid: inv uint<12>, s_axi_bresp: inv uint<2>, s_axi_bvalid: inv bool, s_axi_bready: bool,
+    s_axi_arid: uint<12>, s_axi_araddr: uint<32>, s_axi_arlen: uint<4>, s_axi_arvalid: bool, s_axi_arready: inv bool,
+    s_axi_rid: inv uint<12>, s_axi_rdata: inv uint<32>, s_axi_rresp: inv uint<2>, s_axi_rlast: inv bool, s_axi_rvalid: inv bool, s_axi_rready: bool,
+    irq: inv bool,
+) {
+    // GP0 passes on the full address, 0x4000_0000 up; its window is 1 GiB, so
+    // the bottom 30 bits are the offset. AXI3 bursts are at most 16 beats.
+    let aw_offset: uint<30> = trunc(s_axi_awaddr);
+    let ar_offset: uint<30> = trunc(s_axi_araddr);
+    let axi = facet_hdl::AxiIn(
+        s_axi_awid, zext(aw_offset), zext(s_axi_awlen), s_axi_awvalid, s_axi_wdata, s_axi_wvalid, s_axi_bready,
+        s_axi_arid, zext(ar_offset), zext(s_axi_arlen), s_axi_arvalid, s_axi_rready,
+    );
+    let button = inst debounce::debounce(clk, rst, btn0);
+    let (o, fabric_irq) = inst hello_fabric::hello_fabric(clk, rst, axi, button);
+    set s_axi_awready = o.awready; set s_axi_wready = o.wready;
+    set s_axi_bid = o.bid; set s_axi_bresp = o.bresp; set s_axi_bvalid = o.bvalid;
+    set s_axi_arready = o.arready; set s_axi_rid = o.rid; set s_axi_rdata = o.rdata;
+    set s_axi_rresp = o.rresp; set s_axi_rlast = o.rlast; set s_axi_rvalid = o.rvalid;
+    set irq = fabric_irq;
+}

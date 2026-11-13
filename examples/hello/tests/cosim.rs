@@ -88,15 +88,24 @@ fn checked_in_spade_matches_the_declaration() {
     }
 }
 
-/// The DE25-Nano top (`hdl/de25_top.spade`, built by `de25/build.sh`) only
-/// goes through Quartus by hand, so at least keep it compiling here.
+/// The board tops (`hdl/<board>_top.spade`) only go through Quartus and
+/// Vivado by hand (`<board>/build.sh`), so at least keep them compiling here.
 #[test]
-fn de25_top_compiles() {
-    let fabric = std::fs::read_to_string(hdl().join("hello_fabric.spade")).unwrap();
-    let top = std::fs::read_to_string(hdl().join("de25_top.spade")).unwrap();
-    let sv = Spade::of::<Hello>()
-        .unwrap()
-        .compile_with(&top, &[Source { module: &["hello_fabric"], name: "hello_fabric.spade", code: &fabric }])
-        .unwrap_or_else(|e| panic!("{e}"));
-    assert!(sv.contains("module hello_de25 ("), "the top keeps its unmangled name for hpsf_top.sv");
+fn board_tops_compile() {
+    let read = |name: &str| std::fs::read_to_string(hdl().join(name)).unwrap();
+    let fabric = read("hello_fabric.spade");
+    let debounce = read("debounce.spade");
+    for board in ["de25", "zybo"] {
+        let sv = Spade::of::<Hello>()
+            .unwrap()
+            .compile_with(
+                &read(&format!("{board}_top.spade")),
+                &[
+                    Source { module: &["hello_fabric"], name: "hello_fabric.spade", code: &fabric },
+                    Source { module: &["debounce"], name: "debounce.spade", code: &debounce },
+                ],
+            )
+            .unwrap_or_else(|e| panic!("{board}: {e}"));
+        assert!(sv.contains(&format!("module hello_{board} (")), "the shell instantiates hello_{board} by name");
+    }
 }

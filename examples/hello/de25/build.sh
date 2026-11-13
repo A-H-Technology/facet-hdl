@@ -3,8 +3,8 @@
 # can't map the lightweight bridge's ports yet. Remove this (and hpsf_top.sv)
 # for a chipsmith.toml once a DE25 manifest takes the lwhps2fpga_* signals.
 #
-#   cargo run --features gen --bin hello-de25   # writes build/spade.sv
-#   examples/hello/de25/build.sh                # writes build/hello.core.rbf
+#   cargo run --features gen --bin hello-top -- de25   # writes build/spade.sv
+#   examples/hello/de25/build.sh                        # writes build/hello.core.rbf
 #
 # The project is agilex5-re's designs/hpsf with hpsf_top.sv swapped, so the
 # HPS IO hash stays phase 1's; the script refuses a core where it doesn't.
@@ -15,7 +15,7 @@ spl=${AGILEX5_RE:-/pool/dev/agilex5-re}/specimens/hps-first/out/spl11/spl11.hex
 want_hash=D921CDF7CADFEECA11572B24600BFD337FFD119E47601CA5075AA911EEC3D07A
 proj=$here/build/quartus
 
-[ -f "$here/build/spade.sv" ] || { echo "no build/spade.sv: run hello-de25 first" >&2; exit 1; }
+[ -f "$here/build/spade.sv" ] || { echo "no build/spade.sv: run hello-top -- de25 first" >&2; exit 1; }
 rm -rf "$proj" && mkdir -p "$proj"
 cp -r "$hpsf"/{hpsf.qpf,hpsf.qsf,hpsf.sdc,hps_wrapper.sv,ip,pins} "$proj"/
 cp "$here/hpsf_top.sv" "$proj"/

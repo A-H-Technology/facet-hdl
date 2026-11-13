@@ -1,0 +1,14 @@
+// The boards' push buttons bounce for a few ms on press and release; without
+// this one press can be several calls to pressed(). The level has to hold
+// for 2^19 cycles (10.5 ms at 50 MHz, 5.2 ms at 100 MHz) before it counts.
+pub entity debounce(clk: clock, rst: bool, raw: bool) -> bool {
+    // Two flops first: the button is asynchronous to clk.
+    reg(clk) sync1: bool initial(false) = raw;
+    reg(clk) sync2: bool initial(false) = sync1;
+    decl stable;
+    reg(clk) held: uint<19> reset(rst: 0) initial(0) =
+        if sync2 == stable { 0 } else { held +. 1 };
+    reg(clk) stable: bool reset(rst: false) initial(false) =
+        if held == 0x7FFFF { sync2 } else { stable };
+    stable
+}

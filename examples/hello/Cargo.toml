@@ -27,5 +27,5 @@ facet-hdl-spade = { path = "../../crates/facet-hdl-spade" }
 facet-hdl-iverilog = { path = "../../crates/facet-hdl-iverilog" }
 
 [[bin]]
-name = "hello-de25"
+name = "hello-top"
 required-features = ["gen"]

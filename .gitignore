@@ -1,3 +1,4 @@
 target
-result*
+/result*
 examples/hello/de25/build
+examples/hello/zybo/build

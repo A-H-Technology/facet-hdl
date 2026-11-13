@@ -103,8 +103,9 @@ inv Option<T>, full: bool }` for a fabric -> host one.
 - **A fingerprint** of the layout sits in word 0 of the register window.
   `bind` refuses a bitstream that was generated from a different declaration.
 
-Target is mercury (Terasic DE25-Nano, Agilex 5) over the lightweight
-HPS-to-FPGA bridge, but the pieces are separate crates:
+Targets are mercury (Terasic DE25-Nano, Agilex 5) over the lightweight
+HPS-to-FPGA bridge and venus (original Digilent Zybo, Zynq-7010) over
+M_AXI_GP0, but the pieces are separate crates:
 
 | crate | role |
 | --- | --- |
@@ -119,8 +120,10 @@ HPS-to-FPGA bridge, but the pieces are separate crates:
 nix develop --command cargo test                                 # incl. the iverilog co-sims
 nix develop --command cargo run --features gen --bin hello-gen   # regenerate examples/hello/hdl/generated
 nix build .#hello-hps                                            # static aarch64-musl hello + hello-async for mercury
-nix develop --command cargo run --features gen --bin hello-de25  # the DE25 top as examples/hello/de25/build/spade.sv
-examples/hello/de25/build.sh                                     # Quartus: build/hello.core.rbf (see "On mercury")
+nix build .#hello-zybo                                           # static armv7-musl hello + hello-async for venus
+nix develop --command cargo run --features gen --bin hello-top -- de25  # a board's top as examples/hello/<board>/build/spade.sv
+examples/hello/de25/build.sh                                     # Quartus: build/hello.core.rbf (see "On the boards")
+examples/hello/zybo/build.sh                                     # Vivado: build/hello.bit
 ```
 
 ## Calls: the fabric calls Rust, Rust calls the fabric
@@ -353,7 +356,9 @@ watching it fail.
   verified:** `UioIrq` (unmask by writing 1, `poll`, read the count). That
   needs a real `uio_pdrv_genirq` device.
 
-## On mercury
+## On the boards
+
+### mercury (DE25-Nano)
 
 On 2026-11-12, hello ran on the DE25-Nano, built by Quartus Prime Pro 26.1.1
 rather than chipsmith: chipsmith's place and route doesn't map the
@@ -386,12 +391,12 @@ Seen on the board:
   back with no await between. So a dropped call's late answer is still only
   verified in the import co-sim's `slow`.
 
-Not yet seen:
+Not yet seen on mercury:
 
 1. **A key press.** Nobody has pressed KEY[0] yet, so "one `pressed` per
    press, none while held" isn't verified on hardware (the co-sim's 20-cycle
-   press is; the debouncer isn't simulated).
-2. **`Uio` and its interrupt.** mercury has the node since 2026-11-13
+   press is; the debouncer isn't simulated). Same on venus.
+2. **`Uio` and its interrupt on mercury** (seen on venus, below). mercury has the node since 2026-11-13
    (nixos-fpga 6b864d2, `hardware.terasic.de25-nano.lwBridgeUio`, on by
    default): `/dev/uio0` named `lwhps2fpga`, mapping 0x2000_0000 (64 KiB),
    interrupt f2h_irq0[0] = GIC SPI 17, level-high, with `uio_pdrv_genirq`
@@ -406,6 +411,41 @@ Not yet seen:
    the co-sim's `slow` does.
 4. **chipsmith building it,** once a DE25 manifest takes the bridge's
    ports; then `de25/build.sh` and `hpsf_top.sv` go.
+5. **The 12-bit-ID core.** The slave's IDs widened from 4 to 12 bits for
+   GP0 after the run above; the DE25 top zero-extends the bridge's 4. That
+   core builds, but hasn't been loaded on mercury.
+
+### venus (Zybo)
+
+On 2026-11-13, hello ran on the original Zybo, built by Vivado 2026.1:
+chipsmith gives every design a PS7 with its pins tied off and can't route
+M_AXI_GP0 or IRQ_F2P yet. `examples/hello/zybo` is a block design holding
+only the PS7 with GP0 and IRQ_F2P[0] (`ps.tcl`; the PS's own DDR/MIO/clock
+settings aren't in a PL bitstream, so no board preset), `zybo_top.v` around
+it and `hello_zybo` (`hdl/zybo_top.spade`: GP0's address minus its
+0x4000_0000 base, BTN0 debounced). hello and GP0 run on 100 MHz from a PLL
+off the 125 MHz pin (L16), not FCLK_CLK0, which Linux may gate. 125 MHz
+missed by 0.2 ns: the PS7's GP0 outputs arrive late and the register
+file's read path behind RREADY is 13 levels deep. At 100 MHz the worst
+slack is +0.89 ns. `chipsmith flash --ssh` loads the `.bit`.
+
+32-bit ARM needed a fix in facet-core (`vendor/facet-core`, see
+`vendor/README.md`): it marked wide pointers with the address's top bit,
+which ARM Linux's stack (0xBExx_xxxx) has set, so `bind` panicked filling
+the boundary. qemu-user never showed it.
+
+Seen on the board:
+
+- **bind and add_one:** `hello --base 0x4000_0000` and `hello --uio gp0`
+  both print `add_one(41) = 42`.
+- **`Uio` sleeps:** `/dev/uio0` "gp0" (nixos-fpga a7e4c62: 64 KiB at
+  0x4000_0000, IRQF2P[0] = GIC 61, level-high). `hello --uio gp0` used 5
+  ticks of CPU in its first 3 minutes, nearly all of it startup, with its
+  two threads asleep in `futex_do_wait` and `poll_schedule_timeout`.
+  `--base` polling took 19 s of CPU in 50 s (38% of an A9 core).
+- **Overlapping calls on tokio:** `hello-async`, over `--base` and over
+  `--uio gp0`: 64 at once, all right; 10,000 zero-timeout calls, none
+  abandoned, for the same reason as on mercury.
 
 ## Licence
 

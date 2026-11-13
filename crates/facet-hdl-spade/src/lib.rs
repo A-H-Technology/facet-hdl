@@ -108,11 +108,11 @@ impl Spade {
 /// lightweight bridge and the co-simulation testbench name them), for
 /// splicing into a hand-written top's parameter list.
 pub const FLAT_AXI_PORTS: &str = "\
-    s_axi_awid: uint<4>, s_axi_awaddr: uint<32>, s_axi_awlen: uint<8>, s_axi_awvalid: bool, s_axi_awready: inv bool,
+    s_axi_awid: uint<12>, s_axi_awaddr: uint<32>, s_axi_awlen: uint<8>, s_axi_awvalid: bool, s_axi_awready: inv bool,
     s_axi_wdata: uint<32>, s_axi_wvalid: bool, s_axi_wready: inv bool,
-    s_axi_bid: inv uint<4>, s_axi_bresp: inv uint<2>, s_axi_bvalid: inv bool, s_axi_bready: bool,
-    s_axi_arid: uint<4>, s_axi_araddr: uint<32>, s_axi_arlen: uint<8>, s_axi_arvalid: bool, s_axi_arready: inv bool,
-    s_axi_rid: inv uint<4>, s_axi_rdata: inv uint<32>, s_axi_rresp: inv uint<2>, s_axi_rlast: inv bool, s_axi_rvalid: inv bool, s_axi_rready: bool,";
+    s_axi_bid: inv uint<12>, s_axi_bresp: inv uint<2>, s_axi_bvalid: inv bool, s_axi_bready: bool,
+    s_axi_arid: uint<12>, s_axi_araddr: uint<32>, s_axi_arlen: uint<8>, s_axi_arvalid: bool, s_axi_arready: inv bool,
+    s_axi_rid: inv uint<12>, s_axi_rdata: inv uint<32>, s_axi_rresp: inv uint<2>, s_axi_rlast: inv bool, s_axi_rvalid: inv bool, s_axi_rready: bool,";
 
 /// Spade statements turning [`FLAT_AXI_PORTS`] into `axi: facet_hdl::AxiIn`
 /// and wiring `axi_out` (an `AxiOut`) back out to them.

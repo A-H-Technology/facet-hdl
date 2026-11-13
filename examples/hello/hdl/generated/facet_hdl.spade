@@ -3,8 +3,10 @@
 //
 // AXI4 slave -> a word bus, for the generated register file.
 //
-// Shaped for the DE25-Nano's lightweight HPS-to-FPGA bridge as phase 1 sets
-// it up: full AXI4, 32-bit data, 4-bit IDs, bursts of up to 256 beats. Every
+// Shaped for the hard-processor bridges facet-hdl runs behind: the DE25-Nano's
+// lightweight HPS-to-FPGA bridge (AXI4, 4-bit IDs) and the Zynq's M_AXI_GP0
+// (AXI3, 12-bit IDs, 16-beat bursts). 32-bit data, 12-bit IDs so either fits
+// (a narrower bridge zero-extends), bursts of up to 256 beats. Every
 // beat is one 32-bit word: AxSIZE and WSTRB are ignored (the host only does
 // aligned 32-bit accesses), and every burst counts up (INCR), whatever AxBURST
 // says. IDs are echoed. One transaction at a time; a waiting write goes
@@ -16,14 +18,14 @@
 // (a snapshot, a queue entry) see each access exactly once.
 
 pub struct AxiIn {
-    awid: uint<4>,
+    awid: uint<12>,
     awaddr: uint<32>,
     awlen: uint<8>,
     awvalid: bool,
     wdata: uint<32>,
     wvalid: bool,
     bready: bool,
-    arid: uint<4>,
+    arid: uint<12>,
     araddr: uint<32>,
     arlen: uint<8>,
     arvalid: bool,
@@ -33,11 +35,11 @@ pub struct AxiIn {
 pub struct AxiOut {
     awready: bool,
     wready: bool,
-    bid: uint<4>,
+    bid: uint<12>,
     bresp: uint<2>,
     bvalid: bool,
     arready: bool,
-    rid: uint<4>,
+    rid: uint<12>,
     rdata: uint<32>,
     rresp: uint<2>,
     rlast: bool,
@@ -51,10 +53,10 @@ pub struct BusWrite {
 
 enum State {
     Idle,
-    Write { id: uint<4>, word: uint<30>, left: uint<8> },
-    WriteResp { id: uint<4> },
-    Read { id: uint<4>, word: uint<30>, left: uint<8> },
-    ReadData { id: uint<4>, word: uint<30>, left: uint<8>, data: uint<32> },
+    Write { id: uint<12>, word: uint<30>, left: uint<8> },
+    WriteResp { id: uint<12> },
+    Read { id: uint<12>, word: uint<30>, left: uint<8> },
+    ReadData { id: uint<12>, word: uint<30>, left: uint<8>, data: uint<32> },
 }
 
 pub struct Bus {

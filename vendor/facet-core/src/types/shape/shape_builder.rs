@@ -1,0 +1,522 @@
+use alloc::alloc::Layout;
+
+use crate::{
+    Attr, ConstParam, ConstTypeId, DeclId, Def, FormatProxy, MarkerTraits, OpaqueAdapterDef,
+    ProxyDef, Shape, ShapeFlags, ShapeLayout, Type, TypeNameFn, TypeOps, TypeOpsDirect,
+    TypeOpsIndirect, TypeParam, VTableDirect, VTableErased, VTableIndirect, VarianceDesc,
+};
+
+/// Builder for creating [`Shape`] instances.
+///
+/// This builder provides a convenient way to construct Shape values with
+/// sensible defaults. Many fields can be inferred or have reasonable defaults:
+///
+/// ```ignore
+/// ShapeBuilder::for_sized::<MyType>("MyType")
+///     .def(Def::Scalar)
+///     .vtable(my_vtable)
+///     .build()
+/// ```
+pub struct ShapeBuilder {
+    shape: Shape,
+}
+
+const EMPTY_VESSEL: Shape = Shape {
+    id: ConstTypeId::of::<()>(),
+    decl_id: DeclId::new(0),
+    layout: ShapeLayout::Sized(Layout::new::<()>()),
+    vtable: VTableErased::Direct(&VTableDirect::empty()),
+    type_ops: None,
+    marker_traits: MarkerTraits::empty(),
+    ty: Type::Undefined,
+    def: Def::Undefined,
+    type_identifier: "‹undefined›",
+    module_path: None,
+    source_file: None,
+    source_line: None,
+    source_column: None,
+    type_params: &[],
+    const_params: &[],
+    doc: &[],
+    attributes: &[],
+    type_tag: None,
+    inner: None,
+    builder_shape: None,
+    type_name: None,
+    proxy: None,
+    format_proxies: &[],
+    opaque_adapter: None,
+    // Default to bivariant - types with no lifetime parameters impose no
+    // constraints on lifetimes. Types that need specific variance must set it explicitly.
+    //
+    // DANGER: `Bivariant` is the *identity element* of the variance lattice, and it
+    // is also serving here as the placeholder for "nobody declared this". Those are
+    // not the same thing, and conflating them is unsound: `Variance::can_grow()`
+    // returns `true` for `Bivariant`, so any lifetime-carrying shape that forgets to
+    // call `.variance(..)` silently reports "I have no lifetimes" and
+    // `Peek::try_grow_lifetime::<'static>()` hands out a dangling reference to safe
+    // code. `computed_variance_inner` only rescues `UserType::Struct`/`Enum` (which
+    // it repairs by walking fields); everything else falls through to `_ => desc.base`.
+    //
+    // TODO: the systemic fix is a distinct `Variance::Unknown` that is *not*
+    // `can_grow()` and *not* `can_shrink()`, so that a missing declaration fails
+    // closed instead of open. That is a breaking change (it needs `#[non_exhaustive]`
+    // on `Variance` plus explicit declarations at ~109 sites across facet-core) and
+    // is being designed for 1.0. Until then, every lifetime-capable shape must
+    // declare its variance explicitly, and `facet-core/tests/integration/variance_no_bogus_grow.rs`
+    // asserts that none of them report `can_grow()`.
+    variance: VarianceDesc::BIVARIANT,
+    flags: ShapeFlags::empty(),
+    affinity: crate::ReprAffinity::None,
+    tag: None,
+    content: None,
+    rename: None,
+};
+
+impl Shape {
+    /// Create a new builder for a sized type.
+    ///
+    /// The `id` and `layout` are derived from the type parameter.
+    #[inline]
+    pub const fn builder_for_sized<T>(type_identifier: &'static str) -> ShapeBuilder {
+        ShapeBuilder::for_sized::<T>(type_identifier)
+    }
+
+    /// Create a new builder for an unsized type.
+    #[inline]
+    pub const fn builder_for_unsized<T: ?Sized>(type_identifier: &'static str) -> ShapeBuilder {
+        ShapeBuilder::for_unsized::<T>(type_identifier)
+    }
+}
+
+impl ShapeBuilder {
+    /// Create a new builder for a sized type.
+    ///
+    /// The `id` and `layout` are derived from the type parameter.
+    #[inline]
+    pub const fn for_sized<T>(type_identifier: &'static str) -> Self {
+        Self {
+            shape: Shape {
+                id: ConstTypeId::of::<T>(),
+                layout: ShapeLayout::Sized(Layout::new::<T>()),
+                type_identifier,
+                ..EMPTY_VESSEL
+            },
+        }
+    }
+
+    /// Create a new builder for an unsized type.
+    #[inline]
+    pub const fn for_unsized<T: ?Sized>(type_identifier: &'static str) -> Self {
+        Self {
+            shape: Shape {
+                id: ConstTypeId::of::<T>(),
+                layout: ShapeLayout::Unsized,
+                type_identifier,
+                ..EMPTY_VESSEL
+            },
+        }
+    }
+
+    /// Set the vtable (type-erased).
+    #[inline]
+    pub const fn vtable(mut self, vtable: VTableErased) -> Self {
+        self.shape.vtable = vtable;
+        self
+    }
+
+    /// Set the vtable from a direct vtable reference.
+    #[inline]
+    pub const fn vtable_direct(mut self, vtable: &'static VTableDirect) -> Self {
+        self.shape.vtable = VTableErased::Direct(vtable);
+        self
+    }
+
+    /// Set the vtable from an indirect vtable reference.
+    #[inline]
+    pub const fn vtable_indirect(mut self, vtable: &'static VTableIndirect) -> Self {
+        self.shape.vtable = VTableErased::Indirect(vtable);
+        self
+    }
+
+    /// Set the per-type operations (drop, default, clone) using the erased enum.
+    ///
+    /// For generic containers, use this to provide the monomorphized operations
+    /// while sharing the main vtable across all instantiations.
+    #[inline]
+    pub const fn type_ops(mut self, type_ops: TypeOps) -> Self {
+        self.shape.type_ops = Some(type_ops);
+        self
+    }
+
+    /// Set per-type operations for concrete types (uses thin pointers).
+    ///
+    /// Use this for scalars, String, and derived structs/enums.
+    #[inline]
+    pub const fn type_ops_direct(mut self, type_ops: &'static TypeOpsDirect) -> Self {
+        self.shape.type_ops = Some(TypeOps::Direct(type_ops));
+        self
+    }
+
+    /// Set per-type operations for generic containers (uses wide pointers).
+    ///
+    /// Use this for `Vec<T>`, `Option<T>`, `Arc<T>`, etc.
+    #[inline]
+    pub const fn type_ops_indirect(mut self, type_ops: &'static TypeOpsIndirect) -> Self {
+        self.shape.type_ops = Some(TypeOps::Indirect(type_ops));
+        self
+    }
+
+    /// Add a marker trait flag.
+    #[inline]
+    pub const fn add_marker_trait(mut self, trait_flag: MarkerTraits) -> Self {
+        self.shape.marker_traits = self.shape.marker_traits.union(trait_flag);
+        self
+    }
+
+    /// Set all marker traits at once using combined bitflags.
+    #[inline]
+    pub const fn marker_traits(mut self, traits: MarkerTraits) -> Self {
+        self.shape.marker_traits = traits;
+        self
+    }
+
+    /// Mark type as implementing `Eq`.
+    #[inline]
+    pub const fn eq(self) -> Self {
+        self.add_marker_trait(MarkerTraits::EQ)
+    }
+
+    /// Mark type as implementing `Copy`.
+    #[inline]
+    pub const fn copy(self) -> Self {
+        self.add_marker_trait(MarkerTraits::COPY)
+    }
+
+    /// Mark type as implementing `Send`.
+    #[inline]
+    pub const fn send(self) -> Self {
+        self.add_marker_trait(MarkerTraits::SEND)
+    }
+
+    /// Mark type as implementing `Sync`.
+    #[inline]
+    pub const fn sync(self) -> Self {
+        self.add_marker_trait(MarkerTraits::SYNC)
+    }
+
+    /// Mark type as implementing `Unpin`.
+    #[inline]
+    pub const fn unpin(self) -> Self {
+        self.add_marker_trait(MarkerTraits::UNPIN)
+    }
+
+    /// Mark type as implementing `UnwindSafe`.
+    #[inline]
+    pub const fn unwind_safe(self) -> Self {
+        self.add_marker_trait(MarkerTraits::UNWIND_SAFE)
+    }
+
+    /// Mark type as implementing `RefUnwindSafe`.
+    #[inline]
+    pub const fn ref_unwind_safe(self) -> Self {
+        self.add_marker_trait(MarkerTraits::REF_UNWIND_SAFE)
+    }
+
+    /// Set the type.
+    #[inline]
+    pub const fn ty(mut self, ty: Type) -> Self {
+        self.shape.ty = ty;
+        self
+    }
+
+    /// Set the definition.
+    #[inline]
+    pub const fn def(mut self, def: Def) -> Self {
+        self.shape.def = def;
+        self
+    }
+
+    /// Set the module path where this type is defined.
+    ///
+    /// This is typically set to `module_path!()` by the derive macro,
+    /// which expands to the module path at the definition site.
+    #[inline]
+    pub const fn module_path(mut self, module_path: &'static str) -> Self {
+        self.shape.module_path = Some(module_path);
+        self
+    }
+
+    /// Set the declaration identifier.
+    ///
+    /// The `DeclId` identifies the type declaration independent of type
+    /// parameters. For derive macros, this is typically computed from the
+    /// source location and type name.
+    ///
+    /// For non-generic types (no type parameters), you don't need to call this -
+    /// the decl_id will be automatically computed from the type identifier.
+    ///
+    /// For generic foreign types, just set [`module_path`](Self::module_path) and
+    /// the decl_id will be auto-computed from `@module_path#kind#type_identifier`.
+    ///
+    /// See [`DeclId`] for stability guarantees (spoiler: there are none).
+    #[inline]
+    pub const fn decl_id(mut self, decl_id: DeclId) -> Self {
+        self.shape.decl_id = decl_id;
+        self
+    }
+
+    /// Set the source file where this type is defined.
+    ///
+    /// This is typically set to `file!()` by the derive macro
+    /// when the `doc` feature is enabled.
+    #[inline]
+    pub const fn source_file(mut self, file: &'static str) -> Self {
+        self.shape.source_file = Some(file);
+        self
+    }
+
+    /// Set the source line number where this type is defined.
+    ///
+    /// This is typically set to `line!()` by the derive macro
+    /// when the `doc` feature is enabled.
+    #[inline]
+    pub const fn source_line(mut self, line: u32) -> Self {
+        self.shape.source_line = Some(line);
+        self
+    }
+
+    /// Set the source column number where this type is defined.
+    ///
+    /// This is typically set to `column!()` by the derive macro
+    /// when the `doc` feature is enabled.
+    #[inline]
+    pub const fn source_column(mut self, column: u32) -> Self {
+        self.shape.source_column = Some(column);
+        self
+    }
+
+    /// Set the type parameters.
+    #[inline]
+    pub const fn type_params(mut self, type_params: &'static [TypeParam]) -> Self {
+        self.shape.type_params = type_params;
+        self
+    }
+
+    /// Set the const parameters.
+    #[inline]
+    pub const fn const_params(mut self, const_params: &'static [ConstParam]) -> Self {
+        self.shape.const_params = const_params;
+        self
+    }
+
+    /// Set the documentation.
+    #[inline]
+    pub const fn doc(mut self, doc: &'static [&'static str]) -> Self {
+        self.shape.doc = doc;
+        self
+    }
+
+    /// Set the attributes.
+    #[inline]
+    pub const fn attributes(mut self, attributes: &'static [Attr]) -> Self {
+        self.shape.attributes = attributes;
+        self
+    }
+
+    /// Set the type tag.
+    #[inline]
+    pub const fn type_tag(mut self, type_tag: &'static str) -> Self {
+        self.shape.type_tag = Some(type_tag);
+        self
+    }
+
+    /// Set the inner shape (for transparent/newtype wrappers).
+    #[inline]
+    pub const fn inner(mut self, inner: &'static Shape) -> Self {
+        self.shape.inner = Some(inner);
+        self
+    }
+
+    /// Set the builder shape for immutable collections.
+    ///
+    /// If set, deserializers will build the value using the builder shape,
+    /// then convert to the target type. Used for immutable collections like
+    /// `Bytes` (builds through `BytesMut`) or `Arc<[T]>` (builds through `Vec<T>`).
+    #[inline]
+    pub const fn builder_shape(mut self, builder: &'static Shape) -> Self {
+        self.shape.builder_shape = Some(builder);
+        self
+    }
+
+    /// Set the type name function for formatting generic type names.
+    ///
+    /// For generic types like `Vec<T>`, this function formats the full name
+    /// including type parameters (e.g., `Vec<String>`).
+    #[inline]
+    pub const fn type_name(mut self, type_name: TypeNameFn) -> Self {
+        self.shape.type_name = Some(type_name);
+        self
+    }
+
+    /// Set the container-level proxy for custom serialization/deserialization.
+    ///
+    /// When a proxy is set, the type will be serialized/deserialized through
+    /// the proxy type instead of directly.
+    #[inline]
+    pub const fn proxy(mut self, proxy: &'static ProxyDef) -> Self {
+        self.shape.proxy = Some(proxy);
+        self
+    }
+
+    /// Set the format-specific container-level proxy definitions.
+    ///
+    /// Format-specific proxies take precedence over the format-agnostic `proxy` when
+    /// the format matches. Use this for types that need different representations
+    /// in different formats (e.g., XML vs JSON).
+    #[inline]
+    pub const fn format_proxies(mut self, proxies: &'static [FormatProxy]) -> Self {
+        self.shape.format_proxies = proxies;
+        self
+    }
+
+    /// Set the container-level opaque adapter for custom opaque serde.
+    #[inline]
+    pub const fn opaque_adapter(mut self, adapter: &'static OpaqueAdapterDef) -> Self {
+        self.shape.opaque_adapter = Some(adapter);
+        self
+    }
+
+    /// Set the variance description for this type.
+    ///
+    /// For types that propagate inner variance, use `VarianceDesc::propagate(inner_shape)`.
+    /// For types with constant variance, use `VarianceDesc::BIVARIANT` or `VarianceDesc::INVARIANT`.
+    /// For complex types like function pointers, construct with `VarianceDesc::new(base, deps)`.
+    #[inline]
+    pub const fn variance(mut self, variance: VarianceDesc) -> Self {
+        self.shape.variance = variance;
+        self
+    }
+
+    /// Set the flags for this shape.
+    #[inline]
+    pub const fn flags(mut self, flags: ShapeFlags) -> Self {
+        self.shape.flags = flags;
+        self
+    }
+
+    /// Mark this enum as untagged.
+    ///
+    /// Untagged enums serialize their content directly without any discriminant.
+    #[inline]
+    pub const fn untagged(mut self) -> Self {
+        self.shape.flags = self.shape.flags.union(ShapeFlags::UNTAGGED);
+        self
+    }
+
+    /// Set the semantic representation affinity for this shape.
+    ///
+    /// See [`ReprAffinity`](crate::ReprAffinity). Costs nothing: the field
+    /// lives in `Shape`'s existing padding after `flags`.
+    #[inline]
+    pub const fn affinity(mut self, affinity: crate::ReprAffinity) -> Self {
+        self.shape.affinity = affinity;
+        self
+    }
+
+    /// Set the tag field name for internally/adjacently tagged enums.
+    #[inline]
+    pub const fn tag(mut self, tag: &'static str) -> Self {
+        self.shape.tag = Some(tag);
+        self
+    }
+
+    /// Set the content field name for adjacently tagged enums.
+    #[inline]
+    pub const fn content(mut self, content: &'static str) -> Self {
+        self.shape.content = Some(content);
+        self
+    }
+
+    /// Set the rename for this shape.
+    #[inline]
+    pub const fn rename(mut self, rename: &'static str) -> Self {
+        self.shape.rename = Some(rename);
+        self
+    }
+
+    /// Mark this enum as numeric.
+    ///
+    /// Numeric enums serialize to the underlying discriminant
+    #[inline]
+    pub const fn is_numeric(self) -> Self {
+        self.flags(ShapeFlags::NUMERIC)
+    }
+
+    /// Mark this type as Plain Old Data.
+    ///
+    /// POD types have no invariants - any combination of valid field values
+    /// produces a valid instance. This enables safe mutation through reflection.
+    #[inline]
+    pub const fn pod(mut self) -> Self {
+        self.shape.flags = self.shape.flags.union(ShapeFlags::POD);
+        self
+    }
+
+    /// Mark this struct as a metadata container.
+    ///
+    /// Metadata containers serialize transparently through their non-metadata field
+    /// while preserving metadata fields for formats that support them.
+    #[inline]
+    pub const fn metadata_container(mut self) -> Self {
+        self.shape.flags = self.shape.flags.union(ShapeFlags::METADATA_CONTAINER);
+        self
+    }
+
+    /// Build the Shape.
+    ///
+    /// If `ty` was not explicitly set (still `Type::Undefined`), it will be
+    /// inferred from `def`.
+    ///
+    /// # DeclId auto-computation
+    ///
+    /// - Non-generic types: computed from `type_identifier`
+    /// - Generic types with `module_path`: computed from `@module_path#kind#type_identifier`
+    /// - Generic types without `module_path`: panics (derive macro sets `decl_id` explicitly)
+    #[inline]
+    pub const fn build(self) -> Shape {
+        // Compute ty first - we need it for decl_id auto-computation
+        let ty = match self.shape.ty {
+            Type::Undefined => self.shape.def.default_type(),
+            ty => ty,
+        };
+
+        // Handle decl_id:
+        // - If already set (non-zero): use it
+        // - If not set and no generic params: auto-compute from type_identifier
+        // - If not set and has generic params and has module_path: auto-compute from parts
+        // - If not set and has generic params but no module_path: panic
+        let decl_id = if self.shape.decl_id.0 != 0 {
+            self.shape.decl_id
+        } else if self.shape.type_params.is_empty() && self.shape.const_params.is_empty() {
+            // Non-generic type: auto-compute from type_identifier
+            DeclId::new(crate::decl_id_hash(self.shape.type_identifier))
+        } else if let Some(module_path) = self.shape.module_path {
+            // Generic foreign type: auto-compute from module_path + kind + type_identifier
+            DeclId::new(crate::decl_id_hash_extern(
+                module_path,
+                ty.kind_str(),
+                self.shape.type_identifier,
+            ))
+        } else {
+            // Generic type without module_path: must be set explicitly (derive macro does this)
+            panic!("decl_id must be set explicitly for generic types without module_path");
+        };
+
+        Shape {
+            ty,
+            decl_id,
+            ..self.shape
+        }
+    }
+}

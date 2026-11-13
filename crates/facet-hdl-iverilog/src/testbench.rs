@@ -24,12 +24,12 @@ module {TB};
   always #5 clk = ~clk;
   reg rst = 1;
 
-  reg [3:0] awid = 0, arid = 0, id = 0;
+  reg [11:0] awid = 0, arid = 0, id = 12'hA50;
   reg [31:0] awaddr = 0, araddr = 0, wdata = 0;
   reg [7:0] awlen = 0, arlen = 0;
   reg awvalid = 0, wvalid = 0, bready = 0, arvalid = 0, rready = 0;
   wire awready, wready, bvalid, arready, rvalid, rlast;
-  wire [3:0] bid, rid;
+  wire [11:0] bid, rid;
   wire [1:0] bresp, rresp;
   wire [31:0] rdata;
   wire irq;

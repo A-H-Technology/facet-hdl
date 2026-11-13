@@ -3,8 +3,8 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    # nixpkgs' rustc only ships the host std; fenix gives us the aarch64 one so
-    # the HPS binary cross-builds on saturn without compiling a toolchain.
+    # nixpkgs' rustc only ships the host std; fenix gives us the boards' ones
+    # so the HPS binaries cross-build without compiling a toolchain.
     fenix = {
       url = "github:nix-community/fenix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -16,21 +16,19 @@
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
       fx = fenix.packages.${system};
-      hpsTarget = "aarch64-unknown-linux-musl";
-      toolchain = fx.combine [
+      # mercury (DE25-Nano, Cortex-A55) and venus (Zybo, Cortex-A9).
+      boardTargets = [ "aarch64-unknown-linux-musl" "armv7-unknown-linux-musleabihf" ];
+      toolchain = fx.combine ([
         fx.stable.cargo
         fx.stable.rustc
         fx.stable.clippy
         fx.stable.rustfmt
-        fx.targets.${hpsTarget}.stable.rust-std
-      ];
+      ] ++ map (t: fx.targets.${t}.stable.rust-std) boardTargets);
       platform = pkgs.makeRustPlatform { cargo = toolchain; rustc = toolchain; };
-    in
-    {
       # Static musl, linked by rust-lld against the self-contained crt in
-      # rust-std, so it runs on mercury with no libc dependency at all. Plain
-      # mkDerivation because buildRustPackage pins --target to the host.
-      packages.${system}.hello-hps = pkgs.stdenv.mkDerivation {
+      # rust-std, so it runs on the board with no libc dependency at all.
+      # Plain mkDerivation because buildRustPackage pins --target to the host.
+      boardHello = target: pkgs.stdenv.mkDerivation {
         pname = "hello";
         version = "0.1.0";
         src = ./.;
@@ -43,13 +41,19 @@
         };
         nativeBuildInputs = [ toolchain platform.cargoSetupHook ];
         buildPhase = ''
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld \
-            cargo build --release --offline --target ${hpsTarget} --bin hello --bin hello-async
+          export CARGO_TARGET_${pkgs.lib.toUpper (builtins.replaceStrings [ "-" ] [ "_" ] target)}_LINKER=rust-lld
+          cargo build --release --offline --target ${target} --bin hello --bin hello-async
         '';
         installPhase = ''
-          install -Dm755 target/${hpsTarget}/release/hello $out/bin/hello
-          install -Dm755 target/${hpsTarget}/release/hello-async $out/bin/hello-async
+          install -Dm755 target/${target}/release/hello $out/bin/hello
+          install -Dm755 target/${target}/release/hello-async $out/bin/hello-async
         '';
+      };
+    in
+    {
+      packages.${system} = {
+        hello-hps = boardHello "aarch64-unknown-linux-musl";
+        hello-zybo = boardHello "armv7-unknown-linux-musleabihf";
       };
 
       devShells.${system}.default = pkgs.mkShell {
