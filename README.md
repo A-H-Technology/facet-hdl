@@ -391,11 +391,17 @@ Not yet seen:
 1. **A key press.** Nobody has pressed KEY[0] yet, so "one `pressed` per
    press, none while held" isn't verified on hardware (the co-sim's 20-cycle
    press is; the debouncer isn't simulated).
-2. **`Uio` and its interrupt.** mercury loads `uio_pdrv_genirq` but has no
-   node for it: it needs a device-tree overlay with
-   `compatible = "generic-uio"`, `reg` covering 0x2000_0000, and the irq as
-   a level-high SPI 17, plus `uio_pdrv_genirq.of_id=generic-uio` on the
-   kernel command line. That belongs in nixos-fpga, then `hello --uio`.
+2. **`Uio` and its interrupt.** mercury has the node since 2026-11-13
+   (nixos-fpga 6b864d2, `hardware.terasic.de25-nano.lwBridgeUio`, on by
+   default): `/dev/uio0` named `lwhps2fpga`, mapping 0x2000_0000 (64 KiB),
+   interrupt f2h_irq0[0] = GIC SPI 17, level-high, with `uio_pdrv_genirq`
+   bound by `of_id=generic-uio`. Its interrupt path is checked with
+   chipsmith's de25-irq core (191 blocking reads in 10 s, 191 GIC
+   interrupts). The device is root-only (0600). Still to run: `hello --uio`
+   with hello's core loaded, expecting about 0% CPU while idle. Being level,
+   hello's irq has to fall once serviced, or the line refires at once.
+   Avoid `systemctl reboot` on mercury, which hung the HPS once on
+   2026-11-13; reload phase 1 over JTAG or power-cycle instead.
 3. **A late answer on hardware.** It needs an import that answers late, as
    the co-sim's `slow` does.
 4. **chipsmith building it,** once a DE25 manifest takes the bridge's
