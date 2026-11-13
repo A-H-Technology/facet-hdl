@@ -124,6 +124,7 @@ nix build .#hello-zybo                                           # static armv7-
 nix develop --command cargo run --features gen --bin hello-top -- de25  # a board's top as examples/hello/<board>/build/spade.sv
 examples/hello/de25/build.sh                                     # Quartus: build/hello.core.rbf (see "On the boards")
 examples/hello/zybo/build.sh                                     # Vivado: build/hello.bit
+chipsmith -C examples/hello/zybo/chipsmith build                 # or chipsmith, no Vivado: its build/hello.bit
 ```
 
 ## Calls: the fabric calls Rust, Rust calls the fabric
@@ -409,17 +410,12 @@ Not yet seen on mercury:
    2026-11-13; reload phase 1 over JTAG or power-cycle instead.
 3. **A late answer on hardware.** It needs an import that answers late, as
    the co-sim's `slow` does.
-4. **chipsmith building it.** Both boards' paths exist now, untried with
-   hello. The Zybo: chipsmith fa79257 builds a design that instantiates
-   `PS7` and uses M_AXI_GP0 and IRQF2P (ports as Xilinx names them; the list
-   is chipsmith's `crates/chipsmith-xc7/src/synth/cells.v`). Its
-   examples/zybo-gp0, a register block on GP0 at 100 MHz with IRQF2P[0],
-   ran on venus through /dev/uio "gp0": 0 walking-bit errors, the interrupt
-   three of three. The PS7's pins aren't timed, so stay at 100 MHz. The
-   DE25: chipsmith e4ff99c takes the lightweight bridge in the manifest by
-   Quartus' names (`araddr = "lwhps2fpga_araddr"`, `lwhps2fpga_clk`, with
-   the design wired straight to the HPS's AXI4 ports, no adapter);
-   examples/de25-lw builds but hasn't been on the board. Then
+4. **chipsmith building it on the DE25.** On the Zybo it does (below).
+   For the DE25, chipsmith e4ff99c takes the lightweight bridge in the
+   manifest by Quartus' names (`araddr = "lwhps2fpga_araddr"`,
+   `lwhps2fpga_clk`, the design wired straight to the HPS's AXI4 ports, no
+   adapter) and `phase1 = "de25-nano"` for the shell and hash (a3d0431);
+   chipsmith's examples/de25-lw builds but hasn't been on the board. Then
    `de25/build.sh` and `hpsf_top.sv` go.
 5. **The 12-bit-ID core.** The slave's IDs widened from 4 to 12 bits for
    GP0 after the run above; the DE25 top zero-extends the bridge's 4. That
@@ -456,6 +452,17 @@ Seen on the board:
 - **Overlapping calls on tokio:** `hello-async`, over `--base` and over
   `--uio gp0`: 64 at once, all right; 10,000 zero-timeout calls, none
   abandoned, for the same reason as on mercury.
+
+Built by chipsmith (2f263d0) instead, the same day: `examples/hello/zybo/
+chipsmith` is `zybo_top.v` with the PS7 primitive in place of the block
+design and chipsmith's PLL, over the same `build/spade.sv`. chipsmith took
+the Spade SystemVerilog as it is (14 modules, escaped names), made 822
+LUTs, 12 RAM32Ms and 135 CARRY4s, and estimates 8.67 ns at 100 MHz with GP0
+timed as Vivado times it (no clock skew modelled). On venus `hello --uio
+gp0` printed `add_one(41) = 42`, and `hello-async` over `--uio gp0` and
+`--base` ran 64 overlapping calls and 10,000 zero-timeout ones with 0 wrong
+answers. Two builds from the same sources give the same `.bit`. The button
+is still unpressed.
 
 ## Licence
 

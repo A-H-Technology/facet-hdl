@@ -1,0 +1,24 @@
+# hello on the original Zybo, built by chipsmith instead of Vivado:
+#
+#   cargo run --features gen --bin hello-zybo   # writes ../build/spade.sv
+#   chipsmith -C examples/hello/zybo/chipsmith build
+#   chipsmith flash --ssh root@venus examples/hello/zybo/chipsmith/build/hello.bit
+#
+# top.v is ../zybo_top.v with the PS7 primitive in place of Vivado's block
+# design (whose DDR and MIO pins are the PS's own, which chipsmith doesn't
+# route) and chipsmith's PLL.
+[project]
+name = "hello"
+top = "zybo_top"
+sources = ["../build/spade.sv", "top.v"]
+
+[target]
+device = "xc7z010clg400-1"
+
+# The 125 MHz PL clock from the Ethernet PHY, and BTN0 (active high).
+[pins]
+sysclk = "L16"
+btn0 = "R18"
+
+[clocks]
+sysclk = "125 MHz"
