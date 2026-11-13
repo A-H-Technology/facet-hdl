@@ -163,6 +163,7 @@ nix build .#hello-hps                                            # static aarch6
 nix build .#hello-zybo                                           # static armv7-musl hello + hello-async for venus
 nix develop --command cargo run --features gen --bin hello-top -- de25  # a board's top as examples/hello/<board>/build/spade.sv
 examples/hello/de25/build.sh                                     # Quartus: build/hello.core.rbf (see "On the boards")
+chipsmith -C examples/hello/de25/chipsmith build                 # or chipsmith, no Quartus: its build/hello.core.rbf
 examples/hello/zybo/build.sh                                     # Vivado: build/hello.bit
 chipsmith -C examples/hello/zybo/chipsmith build                 # or chipsmith, no Vivado: its build/hello.bit
 ```
@@ -461,12 +462,14 @@ Not yet seen on mercury:
    2026-11-13; reload phase 1 over JTAG or power-cycle instead.
 3. **A late answer on hardware.** It needs an import that answers late, as
    the co-sim's `slow` does.
-4. **chipsmith building it on the DE25.** On the Zybo it does (below).
-   For the DE25, chipsmith e4ff99c takes the lightweight bridge in the
-   manifest by Quartus' names (`araddr = "lwhps2fpga_araddr"`,
-   `lwhps2fpga_clk`, the design wired straight to the HPS's AXI4 ports, no
-   adapter) and `phase1 = "de25-nano"` for the shell and hash (a3d0431);
-   chipsmith's examples/de25-lw builds but hasn't been on the board. Then
+4. **chipsmith's DE25 core on the board.** chipsmith (96e6aea) builds hello
+   for the DE25 with no Quartus: `examples/hello/de25/chipsmith`,
+   hello_de25 straight on the lightweight bridge by manifest
+   (`awaddr = "lwhps2fpga_awaddr"` and so on, `lwhps2fpga_clk`, no
+   adapter), `phase1 = "de25-nano"` for the shell and hash, a counter for
+   reset (chipsmith doesn't map the HPS's h2f_reset). 644 ALMs, 161 MHz by
+   chipsmith's delay model at 50 MHz, HPS IO hash D921...C3D07A, the same
+   bytes from two builds. Not yet loaded: mercury is off. Once it runs,
    `de25/build.sh` and `hpsf_top.sv` go.
 5. **The 12-bit-ID core.** The slave's IDs widened from 4 to 12 bits for
    GP0 after the run above; the DE25 top zero-extends the bridge's 4. That

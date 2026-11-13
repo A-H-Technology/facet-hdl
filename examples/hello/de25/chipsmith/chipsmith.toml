@@ -1,0 +1,46 @@
+# hello on the DE25-Nano, built by chipsmith instead of Quartus:
+#
+#   cargo run --features gen --bin hello-top -- de25   # writes ../build/spade.sv
+#   chipsmith -C examples/hello/de25/chipsmith build
+#   chipsmith -C examples/hello/de25/chipsmith flash --ssh root@mercury.ts.cramt.dk
+#
+# top.v puts hello_de25 straight on the HPS's lightweight bridge: its
+# ports are bound to the bridge's signals below, by the names Quartus' HPS
+# wrapper gives them. phase1 brings the board's HPS shell and HPS IO hash.
+[project]
+name = "hello"
+top = "de25_top"
+sources = ["../build/spade.sv", "top.v"]
+
+[target]
+device = "A5EB013BB23BE4SCS"
+phase1 = "de25-nano"
+
+[pins]
+CLOCK1_50 = { pin = "V16", vccio = "3.3 V" }
+KEY0 = { pin = "C8", vccio = "3.3 V" }
+lw_clk = "lwhps2fpga_clk"
+irq = "f2h_irq0[0]"
+awid = "lwhps2fpga_awid"
+awaddr = "lwhps2fpga_awaddr"
+awlen = "lwhps2fpga_awlen"
+awvalid = "lwhps2fpga_awvalid"
+awready = "lwhps2fpga_awready"
+wdata = "lwhps2fpga_wdata"
+wvalid = "lwhps2fpga_wvalid"
+wready = "lwhps2fpga_wready"
+bid = "lwhps2fpga_bid"
+bresp = "lwhps2fpga_bresp"
+bvalid = "lwhps2fpga_bvalid"
+bready = "lwhps2fpga_bready"
+arid = "lwhps2fpga_arid"
+araddr = "lwhps2fpga_araddr"
+arlen = "lwhps2fpga_arlen"
+arvalid = "lwhps2fpga_arvalid"
+arready = "lwhps2fpga_arready"
+rid = "lwhps2fpga_rid"
+rdata = "lwhps2fpga_rdata"
+rresp = "lwhps2fpga_rresp"
+rlast = "lwhps2fpga_rlast"
+rvalid = "lwhps2fpga_rvalid"
+rready = "lwhps2fpga_rready"
