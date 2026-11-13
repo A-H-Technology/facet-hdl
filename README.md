@@ -409,8 +409,18 @@ Not yet seen on mercury:
    2026-11-13; reload phase 1 over JTAG or power-cycle instead.
 3. **A late answer on hardware.** It needs an import that answers late, as
    the co-sim's `slow` does.
-4. **chipsmith building it,** once a DE25 manifest takes the bridge's
-   ports; then `de25/build.sh` and `hpsf_top.sv` go.
+4. **chipsmith building it.** Both boards' paths exist now, untried with
+   hello. The Zybo: chipsmith fa79257 builds a design that instantiates
+   `PS7` and uses M_AXI_GP0 and IRQF2P (ports as Xilinx names them; the list
+   is chipsmith's `crates/chipsmith-xc7/src/synth/cells.v`). Its
+   examples/zybo-gp0, a register block on GP0 at 100 MHz with IRQF2P[0],
+   ran on venus through /dev/uio "gp0": 0 walking-bit errors, the interrupt
+   three of three. The PS7's pins aren't timed, so stay at 100 MHz. The
+   DE25: chipsmith e4ff99c takes the lightweight bridge in the manifest by
+   Quartus' names (`araddr = "lwhps2fpga_araddr"`, `lwhps2fpga_clk`, with
+   the design wired straight to the HPS's AXI4 ports, no adapter);
+   examples/de25-lw builds but hasn't been on the board. Then
+   `de25/build.sh` and `hpsf_top.sv` go.
 5. **The 12-bit-ID core.** The slave's IDs widened from 4 to 12 bits for
    GP0 after the run above; the DE25 top zero-extends the bridge's 4. That
    core builds, but hasn't been loaded on mercury.
