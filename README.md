@@ -89,14 +89,23 @@ inv Option<T>, full: bool }` for a fabric -> host one.
   returns one `<Boundary>Ports` struct: the bus's answer, the `irq` line, and
   a field per port (a value for a register, a `Read`/`Write` end for a
   queue). In front of it sits an AXI4 slave (`facet_hdl.spade`) shaped
-  for the DE25-Nano's lightweight bridge as its phase 1 sets it up: full
-  AXI4, 32-bit data, 4-bit IDs echoed, bursts. Your fabric logic is Spade
+  for the DE25-Nano's lightweight bridge and the Zynq's M_AXI_GP0: 32-bit
+  data, 12-bit IDs echoed, bursts. Your fabric logic is Spade
   and instantiates the register file; the bus is two struct ports
   (`facet_hdl::AxiIn`/`AxiOut`), and flat `s_axi_*` signals only appear on
   the top level. The Spade compiler runs in-process (`Spade::compile`),
   pinned to v0.21.0, so there's no swim step. Its output is SystemVerilog,
-  which chipsmith reads. (Instantiating the register file straight from VHDL
-  or Verilog isn't tried: its struct ports would follow Spade's own layout.)
+  which chipsmith reads.
+- **Verilog or VHDL** instead of Spade: `<boundary>_core` is the same
+  register file with flat ports, compiled to SystemVerilog
+  (`Spade::compile_core`), plus a VHDL package declaring it as a component
+  (`Spade::core_vhdl`). Each queue is a valid/ready stream (`<port>_valid`,
+  `<port>_data`, `<port>_ready`; an entry moves on a clock edge where both
+  are high), each register a plain vector, and payloads are the packed bits
+  of the [wire format](#wire-format). hello ships them checked in
+  (`hdl/generated/hello_core.sv`, `hello_core_pkg.vhd`), so that side needs
+  no Rust, and has its fabric in both languages too
+  (`hdl/hello_fabric.v`, `hdl/hello_fabric.vhd`).
 - **Host handles** (`facet-hdl`): `bind::<Adder>(transport)` returns that same
   struct with live handles: `b.leds.write(&ctl)?`, `b.status.read()?`. There's
   no `read` on a `ToFabric` and no `write` on a `FromFabric`.
@@ -114,7 +123,7 @@ M_AXI_GP0, but the pieces are separate crates:
 | `facet-hdl-spade` | Spade generator, the AXI4 slave, the in-process compiler; `literal(&value)` renders a Rust value as a Spade constant |
 | `facet-hdl-iverilog` | Co-simulation: Icarus Verilog runs the compiled fabric, and a generated testbench turns stdin lines into AXI4 transactions, a new ID each. `SimTransport` makes the real host code drive it; `vvp sim.vvp +vcd=<file>` dumps waveforms |
 | `facet-hdl-linux` | Linux transports: `DevMem` (uncached `/dev/mem` mapping of the bridge, `AGILEX5_LWH2F = 0x2000_0000`, polls) and `Uio` (a `generic-uio` node: the mapping plus the `irq` line, so `pop_wait` sleeps) |
-| `examples/hello` | The hello world above: declaration, the fabric (`hdl/hello_fabric.spade`), the generator bin, the HPS CLI, and its co-sim |
+| `examples/hello` | The hello world above: declaration, the fabric (`hdl/hello_fabric.spade`, and the same in `.v` and `.vhd`), the generator bin, the HPS CLI, and its co-sims |
 
 ```sh
 nix develop --command cargo test                                 # incl. the iverilog co-sims
@@ -311,7 +320,13 @@ watching it fail.
   wraps to 0), and one 20-cycle button press calls `pressed` exactly once.
   A fabric answering `x` instead of `x + 1` fails, and so does one without
   the edge detection (more than one call per press). The checked-in
-  `hdl/generated/` has to match the declaration.
+  `hdl/generated/` has to match the declaration (for `hello_core.sv`, up
+  to the numbering of Spade's internal names, which changes run to run).
+- The same hello co-sim against `hello_fabric.v` and against
+  `hello_fabric.vhd`, each on the generated `hello_core`. ghdl
+  (`--synth --out=verilog`) turns the VHDL into Verilog so iverilog runs it
+  all. A VHDL fabric answering `x + 2` fails with 43. Neither has been on a
+  board: the board tops still use the Spade fabric.
 - Register co-sim (an adder over plain registers): bind/fingerprint, 3-word
   signed sums, a snapshotted 64-bit cycle counter, a 200-cycle adder showing
   write-then-read returning a stale value and the generation-counter wait
@@ -353,9 +368,9 @@ watching it fail.
   - With pop-order hand-out planted, that returns `slow(1)`'s 2.
 - `Uio`'s register path against a faked `/sys/class/uio` and a plain file in
   place of `/dev/uioN`: lookup by name, the mapping, bounds, a node whose
-  `reg` is smaller than the boundary, and the shared lock path. **Not
-  verified:** `UioIrq` (unmask by writing 1, `poll`, read the count). That
-  needs a real `uio_pdrv_genirq` device.
+  `reg` is smaller than the boundary, and the shared lock path. `UioIrq`
+  (unmask by writing 1, `poll`, read the count) needs a real
+  `uio_pdrv_genirq` device, so it's only checked on venus (see below).
 
 ## On the boards
 

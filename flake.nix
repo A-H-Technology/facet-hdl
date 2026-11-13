@@ -57,7 +57,8 @@
       };
 
       devShells.${system}.default = pkgs.mkShell {
-        packages = [ toolchain pkgs.rust-analyzer pkgs.iverilog ];
+        # ghdl turns the VHDL example into Verilog for the iverilog co-simulation.
+        packages = [ toolchain pkgs.rust-analyzer pkgs.iverilog pkgs.ghdl ];
       };
     };
 }

@@ -4,7 +4,7 @@
 //! under test is exactly the code that will run on the HPS.
 //!
 //! The design under test has the flat AXI4 slave ports of the DE25-Nano's
-//! lightweight bridge as `s_axi_*` (4-bit IDs, 32-bit data, no size, burst,
+//! lightweight bridge as `s_axi_*` (12-bit IDs, 32-bit data, no size, burst,
 //! strobe or last signals: the generated register file ignores those), plus
 //! `clk`, an active-high `rst`, and optionally `irq`. Every transaction the
 //! testbench starts carries a new ID, and a response that doesn't echo it is
